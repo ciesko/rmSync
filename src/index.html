@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+  <title>rmSync</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <h1 class="app-title">rmSync</h1>
+      <div id="toolbar">
+        <button id="btn-sync" title="Sync notes"><svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 2.5v4h4"/><path d="M2.3 10a6 6 0 1 0 .7-5L1.5 6.5"/></svg></button>
+        <button id="btn-settings" title="Settings"><svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v1.2M8 13.3v1.2M3.4 3.4l.85.85M11.75 11.75l.85.85M1.5 8h1.2M13.3 8h1.2M3.4 12.6l.85-.85M11.75 4.25l.85-.85"/></svg></button>
+      </div>
+    </div>
+    <div id="sync-status" class="hidden"></div>
+    <nav id="tree"></nav>
+  </aside>
+
+  <!-- Content -->
+  <main id="content">
+    <div id="empty-state">
+      <p class="empty-title">No notes yet</p>
+      <p class="empty-hint">Configure your reMarkable in Settings, then press Sync.</p>
+    </div>
+
+    <div id="doc-view" class="hidden">
+      <header id="doc-header">
+        <h2 id="doc-title"></h2>
+        <div id="page-nav">
+          <button id="btn-prev" disabled>‹</button>
+          <span id="page-indicator"></span>
+          <button id="btn-next" disabled>›</button>
+        </div>
+      </header>
+      <div id="page-container">
+        <canvas id="page-canvas" class="hidden" width="1404" height="1872"></canvas>
+        <img id="page-image" alt="Page" class="hidden">
+        <p id="page-placeholder" class="hidden">No preview available for this page.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Settings modal -->
+<div id="settings-overlay" class="hidden">
+  <div id="settings-modal">
+    <h2>Settings</h2>
+
+    <label>
+      Host IP
+      <input type="text" id="set-host" placeholder="10.11.99.1">
+    </label>
+
+    <label>
+      Username
+      <input type="text" id="set-username" placeholder="root">
+    </label>
+
+    <label>
+      Password
+      <input type="password" id="set-password" placeholder="Enter device password">
+    </label>
+
+    <label>
+      Storage location
+      <div class="input-row">
+        <input type="text" id="set-storage" placeholder="~/.rmsync" readonly>
+        <button id="btn-pick-folder">Browse…</button>
+      </div>
+    </label>
+
+    <div class="modal-actions">
+      <button id="btn-cancel" class="btn-secondary">Cancel</button>
+      <button id="btn-save" class="btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

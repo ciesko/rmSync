@@ -1,0 +1,379 @@
+/* ── Reset & Tokens ────────────────────────────────── */
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:            #fafaf8;
+  --bg-sidebar:    #f3f3f0;
+  --bg-hover:      #eceee9;
+  --bg-selected:   #e4e6e0;
+  --text:          #2c2c2a;
+  --text-sec:      #8a8a85;
+  --text-muted:    #b5b5b0;
+  --border:        #e5e5e0;
+  --accent:        #4a6274;
+  --white:         #ffffff;
+  --serif:         Georgia, 'Times New Roman', serif;
+  --sans:          -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout ───────────────────────────────────────── */
+
+#app {
+  display: flex;
+  height: 100vh;
+}
+
+/* ── Sidebar ──────────────────────────────────────── */
+
+#sidebar {
+  width: 280px;
+  min-width: 220px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  -webkit-app-region: drag;
+}
+
+#sidebar-header {
+  padding: 40px 20px 12px;          /* room for macOS traffic lights */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app-title {
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+#toolbar {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+#toolbar button {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-sec);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+#toolbar button:hover { background: var(--bg-hover); color: var(--text); }
+#toolbar button .icon { transition: transform 0.15s; }
+#toolbar button.syncing .icon { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Sync status bar */
+#sync-status {
+  padding: 8px 20px;
+  font-size: 12px;
+  color: var(--text-sec);
+  border-bottom: 1px solid var(--border);
+}
+.progress-bar {
+  height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+/* Tree navigation */
+#tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  -webkit-app-region: no-drag;
+}
+
+.tree-label {
+  display: flex;
+  align-items: center;
+  padding: 6px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.1s;
+  gap: 6px;
+  user-select: none;
+}
+.tree-label:hover { background: var(--bg-hover); }
+.tree-label.selected { background: var(--bg-selected); font-weight: 500; }
+
+.tree-chevron {
+  width: 16px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  text-align: center;
+}
+.tree-chevron.expanded { transform: rotate(90deg); }
+.tree-chevron.spacer { visibility: hidden; }
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Glyph icons for tree items */
+.tree-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+.tree-label:hover .tree-icon { color: var(--text-sec); }
+.tree-label.selected .tree-icon { color: var(--text); }
+
+.tree-children { padding-left: 16px; }
+.tree-children.collapsed { display: none; }
+
+.tree-empty {
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ── Main content ─────────────────────────────────── */
+
+#content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--white);
+}
+
+/* Empty state */
+#empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  text-align: center;
+}
+.empty-title {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.empty-hint {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 300px;
+  line-height: 1.6;
+}
+
+/* Document view */
+#doc-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#doc-header {
+  padding: 40px 60px 20px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+#doc-title {
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+#page-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+#page-nav button {
+  background: none;
+  border: 1px solid var(--border);
+  font-size: 18px;
+  color: var(--text-sec);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+#page-nav button:hover:not(:disabled) { background: var(--bg); color: var(--text); }
+#page-nav button:disabled { opacity: 0.3; cursor: default; }
+
+#page-indicator {
+  font-size: 13px;
+  color: var(--text-sec);
+  min-width: 60px;
+  text-align: center;
+}
+
+/* Page display */
+#page-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 20px 60px 40px;
+  scroll-behavior: smooth;
+}
+
+#page-image {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+#page-canvas {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+#page-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 80px;
+}
+
+/* ── Settings modal ───────────────────────────────── */
+
+#settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+#settings-modal {
+  background: var(--white);
+  border-radius: 12px;
+  padding: 36px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+}
+#settings-modal h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 400;
+  margin-bottom: 28px;
+}
+
+#settings-modal label {
+  display: block;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+#settings-modal input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  transition: border-color 0.15s;
+}
+#settings-modal input:focus { outline: none; border-color: var(--accent); }
+
+.input-row { display: flex; gap: 8px; margin-top: 6px; }
+.input-row input { margin-top: 0; flex: 1; }
+.input-row button {
+  flex-shrink: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.input-row button:hover { background: var(--bg-hover); }
+
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 28px; }
+
+.btn-primary, .btn-secondary {
+  padding: 10px 24px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: none;
+}
+.btn-primary { background: var(--text); color: var(--white); }
+.btn-primary:hover { opacity: 0.85; }
+.btn-secondary { background: none; color: var(--text-sec); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--bg); }
+
+/* ── Utilities ────────────────────────────────────── */
+
+.hidden { display: none !important; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
