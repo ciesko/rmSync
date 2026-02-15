@@ -210,8 +210,10 @@ async function showPage(index) {
 
 // ── Stroke rendering ────────────────────────────────
 
-// reMarkable pages are 1404 px wide in portrait; point coordinates may be
-// centered around x=0 or already in absolute space depending on format/version.
+// reMarkable coordinate system: simple pages have X centered around 0
+// (-702 .. +702); text-grouped pages may use a different X origin.
+// Y starts at 0 and grows downward; scrollable pages can exceed
+// the 1872 px viewport.
 const RM_WIDTH = 1404;
 const RM_PAGE_HEIGHT = 1872;
 
@@ -227,33 +229,21 @@ function renderStrokes(canvas, strokes) {
     else                      regular.push(s);
   }
 
-  // Calculate bounds from non-eraser strokes only (erasers remove content,
-  // they shouldn't inflate the visible area).
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = RM_PAGE_HEIGHT;
-
+  // Find actual extents (X may be centered or absolute depending on page
+  // type; Y can scroll beyond the default viewport).
+  let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
   const visibleStrokes = highlights.concat(regular);
   for (const s of visibleStrokes) {
     for (const p of s.points) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
     }
   }
+  // Fall back to centered coordinate system when there are no visible strokes
+  if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
 
-  if (!Number.isFinite(minX)) minX = 0;
-  if (!Number.isFinite(maxX)) maxX = RM_WIDTH;
-  if (!Number.isFinite(minY)) minY = 0;
-
-  const xSpan = Math.max(1, maxX - minX);
-  const leftPad = Math.max(0, (RM_WIDTH - xSpan) / 2);
-  const xOffset = leftPad - minX;
-  const yOffset = minY < 0 ? -minY : 0;
-
-  const canvasH = Math.ceil(maxY + yOffset) + 40; // account for negative-Y shift
+  const canvasH = Math.ceil(maxY) + 40;
 
   canvas.width = RM_WIDTH;
   canvas.height = canvasH;
@@ -263,9 +253,9 @@ function renderStrokes(canvas, strokes) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, RM_WIDTH, canvasH);
 
-  // Normalize point coordinates into canvas space.
+  // Shift so that the leftmost stroke aligns to the canvas edge.
   ctx.save();
-  ctx.translate(xOffset, yOffset);
+  ctx.translate(-minX, 0);
 
   // ── Render in three passes for correct visual layering ──
   //
