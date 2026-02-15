@@ -6,6 +6,7 @@ let currentPage = 0;
 let pages = [];
 let syncing = false;
 let renderGen = 0;
+let zoomLevel = 1;   // 1 = fit-width (default)
 
 // ── DOM helpers ─────────────────────────────────────
 
@@ -73,6 +74,41 @@ function bindEvents() {
 
   // Sync progress stream
   window.api.onSyncProgress(onProgress);
+
+  // Trackpad pinch-to-zoom & pan on page container
+  const container = $('#page-container');
+  container.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;  // only intercept pinch (ctrlKey on macOS trackpad)
+    e.preventDefault();
+
+    const canvas = $('#page-canvas');
+    if (canvas.classList.contains('hidden')) return;
+
+    // Compute min zoom: the level where the full canvas height fits the container
+    const containerH = container.clientHeight - 60;  // account for padding
+    const canvasH = canvas.height;
+    const canvasW = canvas.width;
+    const containerW = container.clientWidth - 120;
+    const fitWidthScale = 1;   // zoom 1 = CSS width:100% = fit-width
+    const fitHeightScale = containerH / (canvasH * (containerW / canvasW));
+    const minZoom = Math.min(fitWidthScale, fitHeightScale);
+
+    const prevZoom = zoomLevel;
+    const delta = -e.deltaY * 0.01;
+    zoomLevel = Math.max(minZoom, Math.min(5, zoomLevel + delta));
+
+    // Scale canvas from top-left; adjust scroll to keep pointer position stable
+    const rect = canvas.getBoundingClientRect();
+    const pointerX = e.clientX - rect.left;
+    const pointerY = e.clientY - rect.top;
+
+    canvas.style.transform = `scale(${zoomLevel})`;
+
+    // Adjust scroll to keep the point under the cursor in place
+    const ratio = zoomLevel / prevZoom;
+    container.scrollLeft = container.scrollLeft * ratio + pointerX * (ratio - 1);
+    container.scrollTop  = container.scrollTop  * ratio + pointerY * (ratio - 1);
+  }, { passive: false });
 }
 
 // ── Notes tree ──────────────────────────────────────
@@ -171,8 +207,10 @@ async function showPage(index) {
 
   const page = pages[index];
 
-  // Scroll back to top when switching pages
-  $('#page-container').scrollTo({ top: 0 });
+  // Scroll back to top and reset zoom when switching pages
+  zoomLevel = 1;
+  $('#page-canvas').style.transform = '';
+  $('#page-container').scrollTo({ top: 0, left: 0 });
 
   const canvas = $('#page-canvas');
   const img = $('#page-image');
