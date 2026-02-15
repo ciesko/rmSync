@@ -525,25 +525,25 @@ function strokeWidth(point, thicknessScale, tool) {
   switch (tool) {
     case PEN.FINELINER_1:
     case PEN.FINELINER_2:
-      return Math.max(base * 0.8, 0.8);
+      return Math.max(base * 0.4, 0.4);
     case PEN.HIGHLIGHTER_1:
     case PEN.HIGHLIGHTER_2:
-      return Math.max(base * 3.0, 8);
+      return Math.max(base * 1.5, 4);
     case PEN.BALLPOINT_1:
     case PEN.BALLPOINT_2:
-      return Math.max(base * 0.7, 0.6);
+      return Math.max(base * 0.35, 0.3);
     case PEN.MECH_PENCIL_1:
     case PEN.MECH_PENCIL_2:
-      return Math.max(base * 0.5, 0.5);
+      return Math.max(base * 0.25, 0.25);
     case PEN.CALLIGRAPHY:
-      return Math.max(base * 1.0, 1.0);
+      return Math.max(base * 0.5, 0.5);
     case PEN.MARKER_1:
     case PEN.MARKER_2:
-      return Math.max(base * 1.5, 2.0);
+      return Math.max(base * 0.75, 1.0);
     case PEN.SHADER:
-      return Math.max(base * 2.5, 4.0);
+      return Math.max(base * 1.25, 2.0);
     default:
-      return Math.max(base, 0.5);
+      return Math.max(base * 0.5, 0.25);
   }
 }
 
