@@ -16,9 +16,19 @@ A lightweight Electron desktop application that syncs handwritten notes from a [
 
 ## Disclaimer
 
-> **This project is for educational and experimental purposes only.**
->
-> It is **not intended for commercial use**. The software is provided **as-is, with absolutely no warranty or liability of any kind**, express or implied. Use it at your own risk. The authors accept no responsibility for any damage, data loss, or other issues that may arise from using this software.
+This project is provided for educational and experimental purposes.
+
+To the maximum extent permitted by applicable law:
+
+- The software is provided **"AS IS" and "AS AVAILABLE"**, without warranties or conditions of any kind, express or implied.
+- The authors and contributors disclaim all warranties, including (without limitation) merchantability, fitness for a particular purpose, non-infringement, reliability, security, and accuracy.
+- You use this software entirely at your own risk.
+- The authors and contributors are **not liable** for any claim, damages, or other liability, whether direct, indirect, incidental, special, exemplary, consequential, or punitive, including (without limitation) data loss, data corruption, device issues, downtime, business interruption, lost profits, or third-party claims.
+- You are solely responsible for backups, recovery planning, and validating results before relying on them.
+
+No support, maintenance, uptime, or compatibility guarantees are provided.
+
+If this disclaimer conflicts with any mandatory law in your jurisdiction, only the minimum portion necessary is limited, and the remainder continues to apply.
 
 ## License
 

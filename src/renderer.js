@@ -259,9 +259,10 @@ function renderStrokes(canvas, strokes) {
 
   // ── Render in three passes for correct visual layering ──
   //
-  // Pass 1: Highlights (bottom layer) — drawn first so pen strokes sit on top
+  // Pass 1: Highlights (bottom layer) — use 'multiply' so underlying
+  //         strokes remain visible through the highlight wash.
   for (const stroke of highlights) {
-    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'source-over');
+    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'multiply');
   }
 
   // Pass 2: Regular pen strokes (middle layer) — on top of highlights

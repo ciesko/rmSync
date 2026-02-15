@@ -499,7 +499,7 @@ function opacityForTool(tool) {
   switch (tool) {
     case PEN.HIGHLIGHTER_1:
     case PEN.HIGHLIGHTER_2:
-      return 0.25;
+      return 0.15;
     case PEN.SHADER:
       return 0.15;
     case PEN.MARKER_1:
