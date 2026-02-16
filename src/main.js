@@ -3,6 +3,8 @@ const path = require('path');
 const store = require('./lib/store');
 const sync = require('./lib/sync');
 const notes = require('./lib/notes');
+const ssh = require('./lib/ssh');
+const pdfUpload = require('./lib/pdfUpload');
 const { parseRmFile, colorForId, opacityForTool, strokeWidth, PEN } = require('./lib/rmparser');
 
 let win;
@@ -100,4 +102,59 @@ ipcMain.handle('pick-folder', async () => {
     properties: ['openDirectory', 'createDirectory'],
   });
   return result.filePaths[0] || null;
+});
+
+ipcMain.handle('pick-pdfs', async () => {
+  const result = await dialog.showOpenDialog(win, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  return result.filePaths;
+});
+
+ipcMain.handle('upload-pdfs', async (_, filePaths) => {
+  const s = store.load();
+  if (!s.password) throw new Error('Password not set — open Settings first.');
+
+  win?.webContents.send('sync-progress', {
+    phase: 'connecting', message: 'Connecting to reMarkable…',
+  });
+
+  const { conn, sftp } = await ssh.connect(s);
+  try {
+    const results = [];
+    const errors = [];
+
+    for (let i = 0; i < filePaths.length; i++) {
+      const name = path.basename(filePaths[i], '.pdf');
+      win?.webContents.send('sync-progress', {
+        phase: 'uploading',
+        message: `Uploading ${name}`,
+        current: i + 1,
+        total: filePaths.length,
+      });
+      try {
+        const r = await pdfUpload.uploadPdf(conn, sftp, filePaths[i], name);
+        results.push(r);
+      } catch (err) {
+        errors.push(name);
+      }
+    }
+
+    if (results.length > 0) {
+      win?.webContents.send('sync-progress', {
+        phase: 'restarting', message: 'Refreshing reMarkable…',
+      });
+      await pdfUpload.restartXochitl(conn);
+    }
+
+    const msg = errors.length
+      ? `Uploaded ${results.length}, failed ${errors.length}: ${errors.join(', ')}`
+      : `Uploaded ${results.length} PDF${results.length !== 1 ? 's' : ''}`;
+
+    win?.webContents.send('sync-progress', { phase: 'done', message: msg, error: errors.length > 0 });
+    return results;
+  } finally {
+    conn.end();
+  }
 });

@@ -66,6 +66,17 @@ function loadNotes(storagePath) {
     } catch {}
   }
 
+  // Build folder path lookup from parent chain
+  function folderPath(uuid) {
+    const parts = [];
+    let id = items[uuid]?.parent;
+    while (id && items[id]) {
+      parts.unshift(items[id].name);
+      id = items[id].parent;
+    }
+    return parts.length ? '/' + parts.join('/') : '/';
+  }
+
   function buildTree(parentId) {
     return Object.values(items)
       .filter((i) => !i.deleted && i.parent !== 'trash' && i.parent === parentId)
@@ -75,6 +86,7 @@ function loadNotes(storagePath) {
       })
       .map((item) => ({
         ...item,
+        folderPath: item.type !== 'CollectionType' ? folderPath(item.uuid) : undefined,
         children:
           item.type === 'CollectionType' ? buildTree(item.uuid) : undefined,
       }));

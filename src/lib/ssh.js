@@ -67,4 +67,36 @@ function download(sftp, remotePath, localPath) {
   });
 }
 
-module.exports = { connect, listRecursive, download };
+function upload(sftp, localPath, remotePath) {
+  return new Promise((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+function writeFile(sftp, remotePath, content) {
+  return new Promise((resolve, reject) => {
+    const stream = sftp.createWriteStream(remotePath);
+    stream.on('error', reject);
+    stream.end(content, 'utf8', resolve);
+  });
+}
+
+function exec(conn, command) {
+  return new Promise((resolve, reject) => {
+    conn.exec(command, (err, stream) => {
+      if (err) return reject(err);
+      let out = '';
+      stream.on('data', (d) => { out += d; });
+      stream.stderr.on('data', (d) => { out += d; });
+      stream.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`Command failed (${code}): ${out}`));
+        resolve(out);
+      });
+    });
+  });
+}
+
+module.exports = { connect, listRecursive, download, upload, writeFile, exec };

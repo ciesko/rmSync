@@ -5,6 +5,7 @@ let currentDoc = null;
 let currentPage = 0;
 let pages = [];
 let syncing = false;
+let uploading = false;
 let renderGen = 0;
 let zoomLevel = 1;   // 1 = fit-width (default)
 
@@ -81,34 +82,88 @@ function bindEvents() {
     if (!e.ctrlKey) return;  // only intercept pinch (ctrlKey on macOS trackpad)
     e.preventDefault();
 
+    // Find the visible element (canvas or image)
     const canvas = $('#page-canvas');
-    if (canvas.classList.contains('hidden')) return;
+    const img = $('#page-image');
+    const target = !canvas.classList.contains('hidden') ? canvas
+                 : !img.classList.contains('hidden') ? img : null;
+    if (!target) return;
 
-    // Compute min zoom: the level where the full canvas height fits the container
-    const containerH = container.clientHeight - 60;  // account for padding
-    const canvasH = canvas.height;
-    const canvasW = canvas.width;
+    // Compute min zoom: fit-height
+    const containerH = container.clientHeight - 60;
     const containerW = container.clientWidth - 120;
-    const fitWidthScale = 1;   // zoom 1 = CSS width:100% = fit-width
-    const fitHeightScale = containerH / (canvasH * (containerW / canvasW));
-    const minZoom = Math.min(fitWidthScale, fitHeightScale);
+    const natW = target.tagName === 'CANVAS' ? target.width : (target.naturalWidth || target.offsetWidth);
+    const natH = target.tagName === 'CANVAS' ? target.height : (target.naturalHeight || target.offsetHeight);
+    const fitHeightScale = containerH / (natH * (containerW / natW));
+    const minZoom = Math.min(1, fitHeightScale);
 
     const prevZoom = zoomLevel;
     const delta = -e.deltaY * 0.01;
     zoomLevel = Math.max(minZoom, Math.min(5, zoomLevel + delta));
 
-    // Scale canvas from top-left; adjust scroll to keep pointer position stable
-    const rect = canvas.getBoundingClientRect();
+    // Scale from top-left; adjust scroll to keep pointer position stable
+    const rect = target.getBoundingClientRect();
     const pointerX = e.clientX - rect.left;
     const pointerY = e.clientY - rect.top;
 
-    canvas.style.transform = `scale(${zoomLevel})`;
+    target.style.transform = `scale(${zoomLevel})`;
 
-    // Adjust scroll to keep the point under the cursor in place
     const ratio = zoomLevel / prevZoom;
     container.scrollLeft = container.scrollLeft * ratio + pointerX * (ratio - 1);
     container.scrollTop  = container.scrollTop  * ratio + pointerY * (ratio - 1);
   }, { passive: false });
+
+  // PDF upload — sidebar drop zone & file picker
+  const dropArea = $('#upload-droparea');
+  const uploadStatus = $('#upload-status');
+
+  dropArea.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dropArea.classList.add('drag-over');
+  });
+  dropArea.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dropArea.classList.remove('drag-over');
+  });
+  dropArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  dropArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropArea.classList.remove('drag-over');
+    const paths = [];
+    for (const file of e.dataTransfer.files) {
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        paths.push(window.api.getPathForFile(file));
+      }
+    }
+    if (paths.length > 0) uploadPdfs(paths);
+  });
+
+  $('#btn-upload-pick').addEventListener('click', async () => {
+    const paths = await window.api.pickPdfs();
+    if (paths && paths.length > 0) uploadPdfs(paths);
+  });
+}
+
+async function uploadPdfs(filePaths) {
+  if (syncing || uploading) return;
+  uploading = true;
+
+  const btn = $('#btn-sync');
+  const us = $('#upload-status');
+  btn.classList.add('syncing');
+  us.className = '';
+  us.textContent = 'Uploading…';
+
+  try {
+    await window.api.uploadPdfs(filePaths);
+  } catch (err) {
+    onUploadProgress({ phase: 'done', message: `Upload failed: ${err.message}`, error: true });
+  }
+  btn.classList.remove('syncing');
+  uploading = false;
 }
 
 // ── Notes tree ──────────────────────────────────────
@@ -118,13 +173,39 @@ async function refreshNotes() {
   renderTree();
 }
 
+/** Recursively collect all PDFs from the tree, removing them from their folders. */
+function extractPdfs(items) {
+  const pdfs = [];
+  const rest = [];
+  for (const item of items) {
+    if (item.type !== 'CollectionType' && item.fileType === 'pdf') {
+      pdfs.push(item);
+    } else if (item.type === 'CollectionType' && item.children) {
+      const childPdfs = extractPdfs(item.children);
+      pdfs.push(...childPdfs.pdfs);
+      const folder = { ...item, children: childPdfs.rest };
+      // Keep folder only if it still has non-PDF children
+      if (folder.children.length > 0) rest.push(folder);
+    } else {
+      rest.push(item);
+    }
+  }
+  return { pdfs, rest };
+}
+
 function renderTree() {
   const tree = $('#tree');
   if (!notes.length) {
     tree.innerHTML = '<div class="tree-empty">No notes synced</div>';
     return;
   }
-  tree.innerHTML = buildItems(notes);
+  const { rest, pdfs } = extractPdfs(notes);
+  let html = buildItems(rest);
+  if (pdfs.length) {
+    html += `<div class="tree-section-label">PDFs</div>`;
+    html += buildItems(pdfs);
+  }
+  tree.innerHTML = html;
 }
 
 // ── SVG glyph icons ─────────────────────────────────
@@ -133,7 +214,7 @@ const ICON = {
   folder: `<svg class="tree-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5V12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5H3A1 1 0 0 0 2 4.5z"/></svg>`,
   notebook: `<svg class="tree-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="1.5" width="9.5" height="13" rx="1.5"/><line x1="6" y1="1.5" x2="6" y2="14.5"/><line x1="8" y1="5" x2="11" y2="5"/><line x1="8" y1="7.5" x2="11" y2="7.5"/><line x1="8" y1="10" x2="10" y2="10"/></svg>`,
   quickSheet: `<svg class="tree-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5l3 3V13a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 13V3A1.5 1.5 0 0 1 4 1.5z"/><path d="M9.5 1.5V5h3"/><path d="M8.5 7.5L7 10h2l-1.5 2.5"/></svg>`,
-  pdf: `<svg class="tree-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5l3 3V13a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 13V3A1.5 1.5 0 0 1 4 1.5z"/><path d="M9.5 1.5V5h3"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="10.5" x2="11" y2="10.5"/></svg>`,
+  pdf: `<svg class="tree-icon tree-icon-pdf" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5l3 3V13a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 13V3A1.5 1.5 0 0 1 4 1.5z"/><path d="M9.5 1.5V5h3"/><text x="8" y="11.5" text-anchor="middle" font-size="5" font-weight="600" stroke="none" fill="currentColor">PDF</text></svg>`,
   epub: `<svg class="tree-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5z"/><path d="M6 1v14"/><line x1="8" y1="5" x2="11" y2="5"/><line x1="8" y1="7.5" x2="11" y2="7.5"/></svg>`,
 };
 
@@ -144,6 +225,26 @@ function docIcon(item) {
   if (item.fileType === 'pdf') return ICON.pdf;
   if (item.fileType === 'epub') return ICON.epub;
   return ICON.notebook;
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(Number(ts));
+  if (isNaN(d)) return '';
+  const now = new Date();
+  const opts = d.getFullYear() === now.getFullYear()
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' };
+  return d.toLocaleDateString(undefined, opts);
+}
+
+function docMeta(item) {
+  const parts = [];
+  const date = formatDate(item.lastModified);
+  if (date) parts.push(date);
+  if (item.folderPath && item.folderPath !== '/') parts.push(item.folderPath);
+  if (item.pageCount > 0) parts.push(`${item.pageCount}p`);
+  return parts.length ? `<span class="tree-meta">${esc(parts.join(' · '))}</span>` : '';
 }
 
 function buildItems(items) {
@@ -167,7 +268,10 @@ function buildItems(items) {
              data-action="doc" data-uuid="${item.uuid}">
           <span class="tree-chevron spacer">›</span>
           ${docIcon(item)}
-          <span class="tree-name">${esc(item.name)}</span>
+          <span class="tree-name-col">
+            <span class="tree-name">${esc(item.name)}</span>
+            ${docMeta(item)}
+          </span>
         </div>
       </div>`;
   }).join('');
@@ -210,6 +314,7 @@ async function showPage(index) {
   // Scroll back to top and reset zoom when switching pages
   zoomLevel = 1;
   $('#page-canvas').style.transform = '';
+  $('#page-image').style.transform = '';
   $('#page-container').scrollTo({ top: 0, left: 0 });
 
   const canvas = $('#page-canvas');
@@ -376,7 +481,7 @@ function drawStroke(ctx, stroke, color, opacity, compositeOp) {
 // ── Sync ────────────────────────────────────────────
 
 async function doSync() {
-  if (syncing) return;
+  if (syncing || uploading) return;
   syncing = true;
 
   const btn = $('#btn-sync');
@@ -403,6 +508,8 @@ async function doSync() {
 }
 
 function onProgress(data) {
+  // Route upload-related phases to the sidebar upload status
+  if (uploading) return onUploadProgress(data);
   const status = $('#sync-status');
   if (data.phase === 'downloading') {
     const pct = Math.round((data.current / data.total) * 100);
@@ -410,6 +517,22 @@ function onProgress(data) {
       `${esc(data.message)}<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>`;
   } else {
     status.textContent = data.message;
+  }
+}
+
+function onUploadProgress(data) {
+  const us = $('#upload-status');
+  us.classList.remove('hidden', 'success', 'error');
+  if (data.phase === 'uploading') {
+    const pct = Math.round((data.current / data.total) * 100);
+    us.innerHTML =
+      `${esc(data.message)}<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>`;
+  } else if (data.phase === 'done') {
+    us.textContent = data.message;
+    us.classList.add(data.error ? 'error' : 'success');
+    setTimeout(() => us.classList.add('hidden'), 5000);
+  } else {
+    us.textContent = data.message;
   }
 }
 
