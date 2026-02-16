@@ -7,7 +7,13 @@ let pages = [];
 let syncing = false;
 let uploading = false;
 let renderGen = 0;
+let pageDirection = 'right'; // 'left' or 'right'
 let zoomLevel = 1;   // 1 = fit-width (default)
+let savedCollapseState = new Map(); // folder collapse state before search
+let seenPages = new Set();
+let animatingStrokes = false;
+let gridMode = false;
+let temporalMode = false;
 
 // ── DOM helpers ─────────────────────────────────────
 
@@ -22,6 +28,10 @@ function esc(str) {
 // ── Init ────────────────────────────────────────────
 
 async function init() {
+  // Connection dot starts hidden
+  const connDot = $('#conn-dot');
+  if (connDot) connDot.classList.add('hidden');
+
   bindEvents();
   const settings = await window.api.getSettings();
   if (!settings.hasPassword) showSettings();
@@ -45,8 +55,29 @@ function bindEvents() {
   });
 
   // Page navigation
-  $('#btn-prev').addEventListener('click', () => showPage(currentPage - 1));
-  $('#btn-next').addEventListener('click', () => showPage(currentPage + 1));
+  $('#btn-prev').addEventListener('click', () => navigatePage(currentPage - 1));
+  $('#btn-next').addEventListener('click', () => navigatePage(currentPage + 1));
+
+  // Replay button
+  $('#btn-replay').addEventListener('click', () => {
+    const key = currentDoc + ':' + currentPage;
+    seenPages.delete(key);
+    showPage(currentPage);
+  });
+
+  // Temporal mode toggle
+  $('#btn-temporal').addEventListener('click', () => {
+    temporalMode = !temporalMode;
+    $('#btn-temporal').classList.toggle('active', temporalMode);
+    // Re-render current page to apply/remove temporal coloring
+    const key = currentDoc + ':' + currentPage;
+    seenPages.delete(key); // force non-animated re-render path
+    seenPages.add(key);    // but mark as seen so it doesn't animate
+    showPage(currentPage);
+  });
+
+  // Grid toggle
+  $('#btn-grid').addEventListener('click', toggleGridView);
 
   // Keyboard
   document.addEventListener('keydown', (e) => {
@@ -54,8 +85,29 @@ function bindEvents() {
       if (e.key === 'Escape') hideSettings();
       return;
     }
-    if (e.key === 'ArrowLeft')  showPage(currentPage - 1);
-    if (e.key === 'ArrowRight') showPage(currentPage + 1);
+    if (e.key === 'Escape') {
+      document.body.classList.remove('focus-mode');
+      return;
+    }
+    if ((e.key === 'f' || e.key === 'F') && currentDoc && !e.metaKey && !e.ctrlKey) {
+      document.body.classList.toggle('focus-mode');
+      return;
+    }
+    if ((e.key === 't' || e.key === 'T') && currentDoc && !e.metaKey && !e.ctrlKey) {
+      temporalMode = !temporalMode;
+      $('#btn-temporal').classList.toggle('active', temporalMode);
+      const key = currentDoc + ':' + currentPage;
+      seenPages.delete(key);
+      seenPages.add(key);
+      showPage(currentPage);
+      return;
+    }
+    if ((e.key === 'g' || e.key === 'G') && currentDoc && !e.metaKey && !e.ctrlKey) {
+      toggleGridView();
+      return;
+    }
+    if (e.key === 'ArrowLeft')  navigatePage(currentPage - 1);
+    if (e.key === 'ArrowRight') navigatePage(currentPage + 1);
   });
 
   // Toolbar
@@ -78,6 +130,7 @@ function bindEvents() {
 
   // Trackpad pinch-to-zoom & pan on page container
   const container = $('#page-container');
+
   container.addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;  // only intercept pinch (ctrlKey on macOS trackpad)
     e.preventDefault();
@@ -113,6 +166,11 @@ function bindEvents() {
     container.scrollTop  = container.scrollTop  * ratio + pointerY * (ratio - 1);
   }, { passive: false });
 
+  // Focus mode — double-click page to toggle
+  $('#page-container').addEventListener('dblclick', () => {
+    if (currentDoc) document.body.classList.toggle('focus-mode');
+  });
+
   // PDF upload — sidebar drop zone & file picker
   const dropArea = $('#upload-droparea');
   const uploadStatus = $('#upload-status');
@@ -145,6 +203,14 @@ function bindEvents() {
     const paths = await window.api.pickPdfs();
     if (paths && paths.length > 0) uploadPdfs(paths);
   });
+
+  // Search / filter
+  const searchInput = $('#search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      filterTree(searchInput.value.trim());
+    });
+  }
 }
 
 async function uploadPdfs(filePaths) {
@@ -206,6 +272,68 @@ function renderTree() {
     html += buildItems(pdfs);
   }
   tree.innerHTML = html;
+
+  // Re-apply search filter if active
+  const searchInput = $('#search-input');
+  if (searchInput && searchInput.value.trim()) {
+    filterTree(searchInput.value.trim());
+  }
+}
+
+function filterTree(query) {
+  const tree = $('#tree');
+  const allItems = tree.querySelectorAll('.tree-item');
+
+  if (!query) {
+    // Restore: remove search-hidden, restore original collapse state
+    allItems.forEach((item) => item.classList.remove('search-hidden'));
+    savedCollapseState.forEach((wasCollapsed, el) => {
+      if (wasCollapsed) el.classList.add('collapsed');
+      else el.classList.remove('collapsed');
+    });
+    savedCollapseState.clear();
+    return;
+  }
+
+  // Save collapse state on first search keystroke
+  if (savedCollapseState.size === 0) {
+    tree.querySelectorAll('.tree-children').forEach((el) => {
+      savedCollapseState.set(el, el.classList.contains('collapsed'));
+    });
+  }
+
+  const lowerQuery = query.toLowerCase();
+
+  allItems.forEach((item) => {
+    const nameEl = item.querySelector(':scope > .tree-label .tree-name');
+    const nameText = nameEl ? nameEl.textContent.toLowerCase() : '';
+    const childrenContainer = item.querySelector(':scope > .tree-children');
+
+    if (childrenContainer) {
+      // Folder: check if any descendant matches
+      const descendants = childrenContainer.querySelectorAll('.tree-item');
+      let hasMatch = false;
+      descendants.forEach((d) => {
+        const dName = d.querySelector(':scope > .tree-label .tree-name');
+        if (dName && dName.textContent.toLowerCase().includes(lowerQuery)) {
+          hasMatch = true;
+        }
+      });
+      if (hasMatch || nameText.includes(lowerQuery)) {
+        item.classList.remove('search-hidden');
+        childrenContainer.classList.remove('collapsed');
+      } else {
+        item.classList.add('search-hidden');
+      }
+    } else {
+      // Leaf item
+      if (nameText.includes(lowerQuery)) {
+        item.classList.remove('search-hidden');
+      } else {
+        item.classList.add('search-hidden');
+      }
+    }
+  });
 }
 
 // ── SVG glyph icons ─────────────────────────────────
@@ -280,6 +408,7 @@ function buildItems(items) {
 // ── Document view ───────────────────────────────────
 
 async function openDocument(uuid, labelEl) {
+  document.body.classList.remove('focus-mode');
   // Highlight
   $('#tree').querySelectorAll('.tree-label.selected')
     .forEach((el) => el.classList.remove('selected'));
@@ -287,6 +416,7 @@ async function openDocument(uuid, labelEl) {
 
   currentDoc = uuid;
   currentPage = 0;
+  seenPages.clear();
   pages = await window.api.getPages(uuid);
 
   const name = labelEl
@@ -297,7 +427,27 @@ async function openDocument(uuid, labelEl) {
   $('#empty-state').classList.add('hidden');
   $('#doc-view').classList.remove('hidden');
 
+  gridMode = false;
+  $('#btn-grid').classList.remove('active');
+  $('#page-grid').classList.add('hidden');
+  $('#page-container').classList.remove('hidden');
+
   showPage(0);
+}
+
+function navigatePage(index) {
+  if (index < 0 || index >= pages.length) return;
+  pageDirection = index > currentPage ? 'right' : 'left';
+  showPage(index);
+}
+
+function animatePageEnter(el) {
+  if (!el) return;
+  const cls = pageDirection === 'right' ? 'page-enter-right' : 'page-enter-left';
+  el.classList.remove('page-enter-right', 'page-enter-left');
+  void el.offsetWidth;
+  el.classList.add(cls);
+  el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
 }
 
 async function showPage(index) {
@@ -309,13 +459,26 @@ async function showPage(index) {
   $('#btn-next').disabled = index >= pages.length - 1;
   $('#page-indicator').textContent = `${index + 1} / ${pages.length}`;
 
+  // Page progress bar
+  const progressFill = $('#page-progress-fill');
+  if (progressFill) {
+    const pct = pages.length <= 1 ? 100 : ((index + 1) / pages.length) * 100;
+    progressFill.style.width = pct + '%';
+  }
+
   const page = pages[index];
 
   // Scroll back to top and reset zoom when switching pages
   zoomLevel = 1;
   $('#page-canvas').style.transform = '';
   $('#page-image').style.transform = '';
-  $('#page-container').scrollTo({ top: 0, left: 0 });
+
+  const container = $('#page-container');
+  container.scrollTo({ top: 0, left: 0 });
+
+  // Crossfade out
+  container.style.transition = 'opacity 0.15s ease';
+  container.style.opacity = '0';
 
   const canvas = $('#page-canvas');
   const img = $('#page-image');
@@ -331,8 +494,16 @@ async function showPage(index) {
     try {
       const strokes = await window.api.getPageStrokes(page.rmPath);
       if (gen !== renderGen) return; // stale — user already navigated away
-      renderStrokes(canvas, strokes);
+      const pageKey = currentDoc + ':' + index;
+      if (!seenPages.has(pageKey)) {
+        seenPages.add(pageKey);
+        animateStrokes(canvas, strokes, gen);
+      } else {
+        renderStrokes(canvas, strokes);
+      }
       canvas.classList.remove('hidden');
+      animatePageEnter(canvas);
+      requestAnimationFrame(() => { container.style.opacity = '1'; });
       return;
     } catch {
       if (gen !== renderGen) return;
@@ -346,8 +517,118 @@ async function showPage(index) {
     if (gen !== renderGen) return;
     img.src = src;
     img.classList.remove('hidden');
+    animatePageEnter(img);
   } else {
     placeholder.classList.remove('hidden');
+  }
+
+  // Crossfade in
+  requestAnimationFrame(() => { container.style.opacity = '1'; });
+}
+
+// ── Grid View ───────────────────────────────────────
+
+function toggleGridView() {
+  gridMode = !gridMode;
+  const btn = $('#btn-grid');
+  const grid = $('#page-grid');
+  const container = $('#page-container');
+  
+  btn.classList.toggle('active', gridMode);
+  
+  if (gridMode) {
+    container.classList.add('hidden');
+    grid.classList.remove('hidden');
+    renderGrid();
+  } else {
+    grid.classList.add('hidden');
+    container.classList.remove('hidden');
+  }
+}
+
+async function renderGrid() {
+  const grid = $('#page-grid');
+  grid.innerHTML = '';
+  
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const cell = document.createElement('div');
+    cell.className = 'grid-page' + (i === currentPage ? ' active' : '');
+    cell.dataset.index = i;
+    
+    // Try to render a small preview
+    if (page.rmPath) {
+      try {
+        const strokes = await window.api.getPageStrokes(page.rmPath);
+        const miniCanvas = document.createElement('canvas');
+        miniCanvas.width = 351; // RM_WIDTH / 4
+        miniCanvas.height = 468; // RM_PAGE_HEIGHT / 4
+        const ctx = miniCanvas.getContext('2d');
+        
+        // Scale down
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 351, 468);
+        ctx.scale(0.25, 0.25);
+        
+        // Find bounds (same as renderStrokes)
+        let minX = Infinity;
+        const visible = strokes.filter(s => !s.isEraser);
+        for (const s of visible) {
+          for (const p of s.points) {
+            if (p.x < minX) minX = p.x;
+          }
+        }
+        if (!isFinite(minX)) minX = 0;
+        ctx.translate(-minX, 0);
+        
+        for (const s of strokes) {
+          if (s.isEraser) continue;
+          const comp = s.isHighlighter ? 'multiply' : 'source-over';
+          drawStroke(ctx, s, s.color, s.opacity, comp);
+        }
+        
+        cell.appendChild(miniCanvas);
+      } catch {
+        // Fall through to thumbnail/placeholder
+      }
+    }
+    
+    if (!cell.children.length) {
+      const imagePath = page.cache || page.thumbnail;
+      if (imagePath) {
+        try {
+          const src = await window.api.getPageImage(imagePath);
+          const imgEl = document.createElement('img');
+          imgEl.src = src;
+          imgEl.alt = `Page ${i + 1}`;
+          cell.appendChild(imgEl);
+        } catch {}
+      }
+    }
+    
+    if (!cell.children.length) {
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'aspect-ratio: 3/4; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 11px;';
+      placeholder.textContent = `Page ${i + 1}`;
+      cell.appendChild(placeholder);
+    }
+    
+    // Page number badge
+    const num = document.createElement('span');
+    num.className = 'grid-page-num';
+    num.textContent = i + 1;
+    cell.appendChild(num);
+    
+    cell.addEventListener('click', () => {
+      gridMode = false;
+      $('#btn-grid').classList.remove('active');
+      $('#page-grid').classList.add('hidden');
+      $('#page-container').classList.remove('hidden');
+      currentPage = i;
+      showPage(i);
+    });
+    
+    grid.appendChild(cell);
   }
 }
 
@@ -359,6 +640,25 @@ async function showPage(index) {
 // the 1872 px viewport.
 const RM_WIDTH = 1404;
 const RM_PAGE_HEIGHT = 1872;
+
+// Temporal gradient: muted gray → sage → teal accent
+function temporalColor(t) {
+  // t is 0..1 (0 = oldest, 1 = newest)
+  // Three-stop gradient: #B8B7B0 → #7A9E9C → #3A7D7B
+  let r, g, b;
+  if (t < 0.5) {
+    const u = t * 2; // 0..1 within first half
+    r = Math.round(184 + (122 - 184) * u);
+    g = Math.round(183 + (158 - 183) * u);
+    b = Math.round(176 + (156 - 176) * u);
+  } else {
+    const u = (t - 0.5) * 2; // 0..1 within second half
+    r = Math.round(122 + (58 - 122) * u);
+    g = Math.round(158 + (125 - 158) * u);
+    b = Math.round(156 + (123 - 156) * u);
+  }
+  return `rgb(${r},${g},${b})`;
+}
 
 function renderStrokes(canvas, strokes) {
   // Separate strokes into categories for correct layering.
@@ -409,8 +709,10 @@ function renderStrokes(canvas, strokes) {
   }
 
   // Pass 2: Regular pen strokes (middle layer) — on top of highlights
-  for (const stroke of regular) {
-    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'source-over');
+  for (let i = 0; i < regular.length; i++) {
+    const stroke = regular[i];
+    const color = temporalMode ? temporalColor(regular.length > 1 ? i / (regular.length - 1) : 1) : stroke.color;
+    drawStroke(ctx, stroke, color, stroke.opacity, 'source-over');
   }
 
   // Pass 3: Erasers (top layer) — removes both pen strokes and highlights
@@ -478,6 +780,74 @@ function drawStroke(ctx, stroke, color, opacity, compositeOp) {
   ctx.globalCompositeOperation = 'source-over';
 }
 
+async function animateStrokes(canvas, strokes, gen) {
+  const highlights = [];
+  const regular    = [];
+  const erasers    = [];
+
+  for (const s of strokes) {
+    if (s.isEraser)          erasers.push(s);
+    else if (s.isHighlighter) highlights.push(s);
+    else                      regular.push(s);
+  }
+
+  const visibleStrokes = highlights.concat(regular);
+
+  let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
+  for (const s of visibleStrokes) {
+    for (const p of s.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
+
+  const canvasH = Math.ceil(maxY) + 40;
+  canvas.width = RM_WIDTH;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, RM_WIDTH, canvasH);
+  ctx.save();
+  ctx.translate(-minX, 0);
+
+  // Draw highlights instantly (fast, bottom layer)
+  for (const stroke of highlights) {
+    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'multiply');
+  }
+
+  // Animate regular strokes
+  const totalStrokes = regular.length;
+  const rawDelay = totalStrokes > 0 ? 600 / totalStrokes : 0;
+  const delay = Math.max(2, Math.min(15, rawDelay));
+
+  animatingStrokes = true;
+  const replayBtn = $('#btn-replay');
+  if (replayBtn) replayBtn.classList.add('animating');
+
+  for (let i = 0; i < regular.length; i++) {
+    if (gen !== renderGen) {
+      animatingStrokes = false;
+      if (replayBtn) replayBtn.classList.remove('animating');
+      return;
+    }
+    const color = temporalMode ? temporalColor(regular.length > 1 ? i / (regular.length - 1) : 1) : regular[i].color;
+    drawStroke(ctx, regular[i], color, regular[i].opacity, 'source-over');
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  // Apply erasers instantly at the end
+  for (const stroke of erasers) {
+    drawStroke(ctx, stroke, '#ffffff', 1.0, 'destination-out');
+  }
+
+  ctx.restore();
+  animatingStrokes = false;
+  if (replayBtn) replayBtn.classList.remove('animating');
+}
+
 // ── Sync ────────────────────────────────────────────
 
 async function doSync() {
@@ -486,10 +856,19 @@ async function doSync() {
 
   const btn = $('#btn-sync');
   const status = $('#sync-status');
+  const connDot = $('#conn-dot');
   btn.classList.add('syncing');
   status.classList.remove('hidden');
+  status.classList.add('active');
   status.textContent = 'Starting…';
 
+  // Connection dot: pulsing during sync
+  if (connDot) {
+    connDot.classList.remove('hidden', 'connected', 'error');
+    connDot.classList.add('pulsing');
+  }
+
+  let syncError = false;
   try {
     await window.api.syncNotes();
     await refreshNotes();
@@ -499,11 +878,27 @@ async function doSync() {
       if (label) openDocument(currentDoc, label);
     }
   } catch (err) {
+    syncError = true;
     status.innerHTML = `<span style="color:#c44">${esc(err.message)}</span>`;
   } finally {
     syncing = false;
     btn.classList.remove('syncing');
-    setTimeout(() => status.classList.add('hidden'), 4000);
+
+    // Connection dot: show result
+    if (connDot) {
+      connDot.classList.remove('pulsing');
+      if (syncError) {
+        connDot.classList.add('error');
+        setTimeout(() => { connDot.classList.remove('error'); connDot.classList.add('hidden'); }, 5000);
+      } else {
+        connDot.classList.add('connected');
+        setTimeout(() => { connDot.classList.remove('connected'); connDot.classList.add('hidden'); }, 3000);
+      }
+    }
+
+    // Sync status slide-out: remove active, then hide after CSS transition
+    status.classList.remove('active');
+    setTimeout(() => status.classList.add('hidden'), 400);
   }
 }
 
