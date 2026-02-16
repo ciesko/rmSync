@@ -128,6 +128,12 @@ function bindEvents() {
   // Sync progress stream
   window.api.onSyncProgress(onProgress);
 
+  // Auto-sync: silently refresh note list
+  window.api.onAutoSyncComplete(async () => {
+    notes = await window.api.getNotes();
+    renderTree();
+  });
+
   // Trackpad pinch-to-zoom & pan on page container
   const container = $('#page-container');
 

@@ -21,7 +21,7 @@ async function sync(settings, onProgress) {
   const rawDir = path.join(settings.storagePath, 'raw');
   fs.mkdirSync(rawDir, { recursive: true });
 
-  onProgress({ phase: 'connecting', message: 'Connecting to reMarkable…' });
+  onProgress({ phase: 'connecting', message: 'Connecting to tablet…' });
   const { conn, sftp } = await ssh.connect(settings);
 
   try {

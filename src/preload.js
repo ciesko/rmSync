@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('api', {
   uploadPdfs:   (paths) => ipcRenderer.invoke('upload-pdfs', paths),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onSyncProgress: (cb)  => ipcRenderer.on('sync-progress', (_, d) => cb(d)),
+  onAutoSyncComplete: (cb) => ipcRenderer.on('auto-sync-complete', () => cb()),
 });

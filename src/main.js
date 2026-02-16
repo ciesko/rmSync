@@ -8,15 +8,19 @@ const pdfUpload = require('./lib/pdfUpload');
 const { parseRmFile, colorForId, opacityForTool, strokeWidth, PEN } = require('./lib/rmparser');
 
 let win;
+const iconPath = path.join(__dirname, 'icon.png');
 
 function createWindow() {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(iconPath);
+  }
   win = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 500,
     titleBarStyle: 'hiddenInset',
-    icon: path.join(__dirname, 'icon.png'),
+    icon: iconPath,
     backgroundColor: '#fafaf8',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -27,8 +31,41 @@ function createWindow() {
   win.loadFile('index.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  startAutoSync();
+});
 app.on('window-all-closed', () => app.quit());
+
+// ── Auto-sync ────────────────────────────────────────
+const AUTO_SYNC_MS = 60 * 60 * 1000;      // 60 minutes
+const RETRY_MS     = 30 * 60 * 1000;      // 30 minutes on failure
+let autoSyncTimer = null;
+
+function scheduleAutoSync(delayMs) {
+  if (autoSyncTimer) clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(doAutoSync, delayMs);
+}
+
+function startAutoSync() {
+  scheduleAutoSync(AUTO_SYNC_MS);
+}
+
+async function doAutoSync() {
+  try {
+    const s = store.load();
+    if (!s.password) { scheduleAutoSync(RETRY_MS); return; }
+    await sync.sync(s, (progress) => {
+      win?.webContents.send('sync-progress', progress);
+    });
+    win?.webContents.send('sync-progress', { phase: 'done', message: 'Auto-synced' });
+    // Reload notes in renderer
+    win?.webContents.send('auto-sync-complete');
+    scheduleAutoSync(AUTO_SYNC_MS);
+  } catch {
+    scheduleAutoSync(RETRY_MS);
+  }
+}
 
 // ── IPC ──────────────────────────────────────────────
 
@@ -117,7 +154,7 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
   if (!s.password) throw new Error('Password not set — open Settings first.');
 
   win?.webContents.send('sync-progress', {
-    phase: 'connecting', message: 'Connecting to reMarkable…',
+    phase: 'connecting', message: 'Connecting to tablet…',
   });
 
   const { conn, sftp } = await ssh.connect(s);
@@ -143,7 +180,7 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
 
     if (results.length > 0) {
       win?.webContents.send('sync-progress', {
-        phase: 'restarting', message: 'Refreshing reMarkable…',
+        phase: 'restarting', message: 'Refreshing tablet…',
       });
       await pdfUpload.restartXochitl(conn);
     }
