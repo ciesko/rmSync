@@ -248,6 +248,7 @@ html, body {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  flex: 1;
 }
 .tree-name-col .tree-name { font-size: 13px; }
 
@@ -312,6 +313,24 @@ html, body {
 .tree-icon-pdf { color: var(--pdf-red); }
 .tree-label:hover .tree-icon-pdf { color: #B04E43; }
 .tree-label.selected .tree-icon-pdf { color: #A34539; }
+
+.tree-delete {
+  opacity: 0;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease), background var(--duration) var(--ease);
+  pointer-events: none;
+}
+.tree-label:hover .tree-delete { opacity: 1; pointer-events: auto; }
+.tree-delete:hover { color: #c0392b; background: rgba(192,57,43,0.1); }
 
 .tree-empty {
   padding: 24px 20px;

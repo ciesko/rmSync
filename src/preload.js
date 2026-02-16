@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFolder:   ()      => ipcRenderer.invoke('pick-folder'),
   pickPdfs:     ()      => ipcRenderer.invoke('pick-pdfs'),
   uploadPdfs:   (paths) => ipcRenderer.invoke('upload-pdfs', paths),
+  deleteDocument: (uuid) => ipcRenderer.invoke('delete-document', uuid),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onSyncProgress: (cb)  => ipcRenderer.on('sync-progress', (_, d) => cb(d)),
   onAutoSyncComplete: (cb) => ipcRenderer.on('auto-sync-complete', () => cb()),
