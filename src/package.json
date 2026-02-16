@@ -6,10 +6,40 @@
   "scripts": {
     "start": "electron ."
   },
+  "build": {
+    "appId": "com.ciesko.rmsync",
+    "productName": "rmSync",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "icon": "icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "dir", "arch": ["arm64"] }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "icon.png",
+      "target": [
+        { "target": "portable" }
+      ]
+    },
+    "dmg": {
+      "title": "rmSync"
+    }
+  },
   "dependencies": {
     "ssh2": "^1.16.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   }
 }
