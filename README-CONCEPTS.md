@@ -1,6 +1,9 @@
-# reMarkable 2 → Mac Note Sync: Concepts & Assessment
+# E-ink Tablet Sync — Concepts & Technical Reference
 
-_Last updated: 2026-02-11_
+> Research notes compiled from community-maintained open-source projects and public documentation.
+> All referenced projects retain their original licenses. See [References](#11-references) for sources and attribution.
+
+_Last updated: 2026-02-16_
 
 ---
 
@@ -58,7 +61,8 @@ documents, syncs with the cloud, and renders to the e-ink display.
 
 ### 2.2 Filesystem Layout
 
-All user data lives under a single flat directory:
+All user data lives under a single flat directory
+([filesystem reference](https://web.archive.org/web/20230616050052/https://remarkablewiki.com/tech/filesystem)):
 
 ```
 /home/root/.local/share/remarkable/xochitl/
@@ -265,6 +269,7 @@ sequence of sampled points. The format has evolved through several versions:
 #### Version 3 (firmware ~1.x–2.x early)
 
 Header: ASCII string `reMarkable .lines file, version=3` + padding (43 bytes total).
+Source: [ax3l/plasma.ninja blog](https://plasma.ninja/blog/devices/remarkable/binary/format/2017/12/26/reMarkable-lines-file-format.html), [reMarkable Kaitai Struct specs](https://github.com/matomatical/reMarkable-kaitai).
 
 ```
 [Header: 43 bytes ASCII + padding]
@@ -299,7 +304,7 @@ types and a wider color palette.
 
 #### Version 6 / "rmscene" (firmware ≥3.0)
 
-Completely new **tagged binary block format**. Major changes:
+Completely new **tagged binary block format** ([rmscene](https://github.com/ricklupton/rmscene)). Major changes:
 
 - **Block-based**: the file is a sequence of typed blocks (each with a type tag
   and length), not a flat struct.
