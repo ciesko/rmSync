@@ -41,6 +41,16 @@ async function init() {
 function bindEvents() {
   // Tree — delegated click
   $('#tree').addEventListener('click', (e) => {
+    // Handle delete button first (stop propagation to prevent opening the doc)
+    const deleteBtn = e.target.closest('.tree-delete');
+    if (deleteBtn) {
+      e.stopPropagation();
+      const uuid = deleteBtn.dataset.uuid;
+      const name = deleteBtn.dataset.name;
+      deleteDocument(uuid, name);
+      return;
+    }
+
     const label = e.target.closest('.tree-label');
     if (!label) return;
 
@@ -198,7 +208,8 @@ function bindEvents() {
     dropArea.classList.remove('drag-over');
     const paths = [];
     for (const file of e.dataTransfer.files) {
-      if (file.name.toLowerCase().endsWith('.pdf')) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.pdf') || name.endsWith('.md')) {
         paths.push(window.api.getPathForFile(file));
       }
     }
@@ -236,6 +247,31 @@ async function uploadPdfs(filePaths) {
   }
   btn.classList.remove('syncing');
   uploading = false;
+}
+
+async function deleteDocument(uuid, name) {
+  if (!confirm(`Delete "${name}" from tablet and local sync?`)) return;
+
+  const us = $('#upload-status');
+  us.classList.remove('hidden', 'success', 'error');
+  us.textContent = 'Deleting…';
+
+  try {
+    await window.api.deleteDocument(uuid);
+    us.textContent = `Deleted "${name}"`;
+    us.classList.add('success');
+    // If we're viewing the deleted doc, clear the view
+    if (currentDoc === uuid) {
+      currentDoc = null;
+      pages = [];
+      document.body.classList.remove('has-document');
+    }
+    await refreshNotes();
+  } catch (err) {
+    us.textContent = `Delete failed: ${err.message}`;
+    us.classList.add('error');
+  }
+  setTimeout(() => us.classList.add('hidden'), 5000);
 }
 
 // ── Notes tree ──────────────────────────────────────
@@ -406,6 +442,7 @@ function buildItems(items) {
             <span class="tree-name">${esc(item.name)}</span>
             ${docMeta(item)}
           </span>
+          ${item.fileType === 'pdf' ? `<button class="tree-delete" data-action="delete" data-uuid="${item.uuid}" data-name="${esc(item.name)}" title="Delete from tablet and local">✕</button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -647,21 +684,26 @@ async function renderGrid() {
 const RM_WIDTH = 1404;
 const RM_PAGE_HEIGHT = 1872;
 
-// Temporal gradient: muted gray → sage → teal accent
+// Temporal gradient: cool blue → violet → warm red-orange
 function temporalColor(t) {
   // t is 0..1 (0 = oldest, 1 = newest)
-  // Three-stop gradient: #B8B7B0 → #7A9E9C → #3A7D7B
+  // Four-stop gradient: #3B82F6 → #8B5CF6 → #E04E6A → #F59E0B
   let r, g, b;
-  if (t < 0.5) {
-    const u = t * 2; // 0..1 within first half
-    r = Math.round(184 + (122 - 184) * u);
-    g = Math.round(183 + (158 - 183) * u);
-    b = Math.round(176 + (156 - 176) * u);
+  if (t < 0.33) {
+    const u = t / 0.33;
+    r = Math.round(59  + (139 - 59)  * u);
+    g = Math.round(130 + (92  - 130) * u);
+    b = Math.round(246 + (246 - 246) * u);
+  } else if (t < 0.66) {
+    const u = (t - 0.33) / 0.33;
+    r = Math.round(139 + (224 - 139) * u);
+    g = Math.round(92  + (78  - 92)  * u);
+    b = Math.round(246 + (106 - 246) * u);
   } else {
-    const u = (t - 0.5) * 2; // 0..1 within second half
-    r = Math.round(122 + (58 - 122) * u);
-    g = Math.round(158 + (125 - 158) * u);
-    b = Math.round(156 + (123 - 156) * u);
+    const u = (t - 0.66) / 0.34;
+    r = Math.round(224 + (245 - 224) * u);
+    g = Math.round(78  + (158 - 78)  * u);
+    b = Math.round(106 + (11  - 106) * u);
   }
   return `rgb(${r},${g},${b})`;
 }

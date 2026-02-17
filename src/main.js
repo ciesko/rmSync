@@ -5,6 +5,7 @@ const sync = require('./lib/sync');
 const notes = require('./lib/notes');
 const ssh = require('./lib/ssh');
 const pdfUpload = require('./lib/pdfUpload');
+const markdownUpload = require('./lib/markdownUpload');
 const { parseRmFile, colorForId, opacityForTool, strokeWidth, PEN } = require('./lib/rmparser');
 
 let win;
@@ -144,7 +145,11 @@ ipcMain.handle('pick-folder', async () => {
 ipcMain.handle('pick-pdfs', async () => {
   const result = await dialog.showOpenDialog(win, {
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    filters: [
+      { name: 'Supported files', extensions: ['pdf', 'md'] },
+      { name: 'PDF', extensions: ['pdf'] },
+      { name: 'Markdown', extensions: ['md'] },
+    ],
   });
   return result.filePaths;
 });
@@ -163,7 +168,8 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
     const errors = [];
 
     for (let i = 0; i < filePaths.length; i++) {
-      const name = path.basename(filePaths[i], '.pdf');
+      const ext = path.extname(filePaths[i]).toLowerCase();
+      const name = path.basename(filePaths[i], ext);
       win?.webContents.send('sync-progress', {
         phase: 'uploading',
         message: `Uploading ${name}`,
@@ -171,7 +177,12 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
         total: filePaths.length,
       });
       try {
-        const r = await pdfUpload.uploadPdf(conn, sftp, filePaths[i], name);
+        let r;
+        if (ext === '.md') {
+          r = await markdownUpload.uploadMarkdown(conn, sftp, filePaths[i], name);
+        } else {
+          r = await pdfUpload.uploadPdf(conn, sftp, filePaths[i], name);
+        }
         results.push(r);
       } catch (err) {
         errors.push(name);
@@ -187,11 +198,41 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
 
     const msg = errors.length
       ? `Uploaded ${results.length}, failed ${errors.length}: ${errors.join(', ')}`
-      : `Uploaded ${results.length} PDF${results.length !== 1 ? 's' : ''}`;
+      : `Uploaded ${results.length} file${results.length !== 1 ? 's' : ''}`;
 
     win?.webContents.send('sync-progress', { phase: 'done', message: msg, error: errors.length > 0 });
     return results;
   } finally {
     conn.end();
+  }
+});
+
+ipcMain.handle('delete-document', async (_, uuid) => {
+  const s = store.load();
+  if (!s.password) throw new Error('Password not set — open Settings first.');
+
+  const REMOTE_PATH = '/home/root/.local/share/remarkable/xochitl';
+  const { conn, sftp } = await ssh.connect(s);
+  try {
+    // Stop xochitl before deleting to prevent corruption
+    await ssh.exec(conn, 'systemctl stop xochitl');
+    try {
+      // Remove all files for this UUID on the device
+      await ssh.exec(conn, `rm -rf ${REMOTE_PATH}/${uuid} ${REMOTE_PATH}/${uuid}.*`);
+    } finally {
+      // Always restart xochitl, even if delete failed
+      await ssh.exec(conn, 'systemctl start xochitl');
+    }
+  } finally {
+    conn.end();
+  }
+
+  // Remove local sync files
+  const rawDir = path.join(s.storagePath, 'raw');
+  const fs = require('fs');
+  const entries = fs.readdirSync(rawDir).filter(f => f.startsWith(uuid));
+  for (const entry of entries) {
+    const full = path.join(rawDir, entry);
+    fs.rmSync(full, { recursive: true, force: true });
   }
 });

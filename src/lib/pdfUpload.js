@@ -86,14 +86,10 @@ async function uploadPdf(conn, sftp, localPdfPath, visibleName) {
 
 /**
  * Signal xochitl to rescan documents.
- * Try SIGUSR1 (no UI flash), fall back to full restart.
+ * SIGUSR1 is no longer supported on recent firmware — use systemctl restart.
  */
 async function restartXochitl(conn) {
-  try {
-    await ssh.exec(conn, 'kill -USR1 $(pidof xochitl)');
-  } catch {
-    await ssh.exec(conn, 'systemctl restart xochitl');
-  }
+  await ssh.exec(conn, 'systemctl restart xochitl');
 }
 
 module.exports = { uploadPdf, restartXochitl };
