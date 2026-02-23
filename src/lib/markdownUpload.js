@@ -23,6 +23,19 @@ const FONTS = {
   monoBold: 'Courier-Bold',
 };
 
+/** Decode common HTML entities that marked emits. */
+function decodeEntities(str) {
+  if (!str) return str;
+  return str
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)));
+}
+
 const HEADING_SIZES = { 1: 22, 2: 18, 3: 15, 4: 13, 5: 12, 6: 11 };
 const BODY_SIZE = 11;
 const CODE_SIZE = 9.5;
@@ -65,8 +78,9 @@ function renderTokens(doc, tokens, opts = {}) {
         const codeW = contentWidth - 8;
         const startY = doc.y;
         doc.font(FONTS.mono).fontSize(CODE_SIZE);
+        const codeText = decodeEntities(token.text);
         // Measure height first
-        const textH = doc.heightOfString(token.text, { width: codeW, lineGap: 2 });
+        const textH = doc.heightOfString(codeText, { width: codeW, lineGap: 2 });
         const boxH = textH + 12;
         // Page break if needed
         if (doc.y + boxH > RM_HEIGHT_PT - MARGIN) doc.addPage();
@@ -75,7 +89,7 @@ function renderTokens(doc, tokens, opts = {}) {
            .roundedRect(MARGIN + indent, boxY, contentWidth, boxH, 3)
            .fill('#f0f0f0')
            .restore();
-        doc.fill('#000').text(token.text, codeX, boxY + 6, {
+        doc.fill('#000').text(codeText, codeX, boxY + 6, {
           width: codeW, lineGap: 2,
         });
         doc.y = boxY + boxH + 4;
@@ -99,22 +113,34 @@ function renderTokens(doc, tokens, opts = {}) {
       }
       case 'list': {
         const items = token.items;
+        const bulletW = token.ordered ? 22 : 14;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          const bullet = token.ordered ? `${token.start + i}.` : '•';
-          doc.font(FONTS.regular).fontSize(BODY_SIZE);
-          doc.text(bullet, MARGIN + indent, doc.y, { continued: true, width: 20 });
-          doc.text(' ', { continued: true });
-          // Render item inline content
+          const bullet = token.ordered ? `${token.start + i}.` : '\u2022';
+          const bulletX = MARGIN + indent;
+          const itemIndent = indent + bulletW;
+          const itemWidth = RM_WIDTH_PT - 2 * MARGIN - itemIndent;
+          const bulletY = doc.y;
+
+          // Draw bullet separately (no continued) so it doesn't constrain text width
+          doc.font(token.ordered ? FONTS.bold : FONTS.regular).fontSize(BODY_SIZE);
+          doc.text(bullet, bulletX, bulletY, { width: bulletW, lineGap: LINE_GAP });
+
+          // Reset Y so item text aligns with the bullet
+          doc.y = bulletY;
+
+          // Render item inline content at the indented offset
           if (item.tokens && item.tokens.length > 0) {
             for (const sub of item.tokens) {
               if (sub.type === 'text' && sub.tokens) {
-                renderInline(doc, sub.tokens, contentWidth - 16, indent + 16);
+                doc.font(FONTS.regular).fontSize(BODY_SIZE);
+                renderInline(doc, sub.tokens, itemWidth, itemIndent);
               } else if (sub.type === 'paragraph' && sub.tokens) {
-                renderInline(doc, sub.tokens, contentWidth - 16, indent + 16);
+                doc.font(FONTS.regular).fontSize(BODY_SIZE);
+                renderInline(doc, sub.tokens, itemWidth, itemIndent);
               } else if (sub.type === 'list') {
                 doc.moveDown(0.2);
-                renderTokens(doc, [sub], { indent: indent + 16 });
+                renderTokens(doc, [sub], { indent: itemIndent });
               }
             }
           }
@@ -179,7 +205,7 @@ function renderTokens(doc, tokens, opts = {}) {
         // Fallback: render raw text if available
         if (token.text) {
           doc.font(FONTS.regular).fontSize(BODY_SIZE)
-             .text(token.text, MARGIN + indent, doc.y, { width: contentWidth, lineGap: LINE_GAP });
+             .text(decodeEntities(token.text), MARGIN + indent, doc.y, { width: contentWidth, lineGap: LINE_GAP });
           doc.moveDown(0.3);
         }
       }
@@ -215,7 +241,7 @@ function flattenInline(tokens, parentFont) {
         if (t.tokens) {
           parts.push(...flattenInline(t.tokens, font));
         } else {
-          parts.push({ text: t.text, font, size: BODY_SIZE });
+          parts.push({ text: decodeEntities(t.text), font, size: BODY_SIZE });
         }
         break;
       case 'strong':
@@ -225,19 +251,19 @@ function flattenInline(tokens, parentFont) {
         parts.push(...flattenInline(t.tokens, font === FONTS.bold ? FONTS.boldItalic : FONTS.italic));
         break;
       case 'codespan':
-        parts.push({ text: t.text, font: FONTS.mono, size: CODE_SIZE });
+        parts.push({ text: decodeEntities(t.text), font: FONTS.mono, size: CODE_SIZE });
         break;
       case 'link':
         parts.push(...flattenInline(t.tokens, font).map(p => ({ ...p, link: t.href })));
         break;
       case 'del':
-        parts.push({ text: t.text || (t.tokens ? t.tokens.map(x => x.text || x.raw || '').join('') : ''), font, size: BODY_SIZE });
+        parts.push({ text: decodeEntities(t.text || (t.tokens ? t.tokens.map(x => x.text || x.raw || '').join('') : '')), font, size: BODY_SIZE });
         break;
       case 'br':
         parts.push({ text: '\n', font, size: BODY_SIZE });
         break;
       default:
-        if (t.raw) parts.push({ text: t.raw, font, size: BODY_SIZE });
+        if (t.raw) parts.push({ text: decodeEntities(t.raw), font, size: BODY_SIZE });
         break;
     }
   }

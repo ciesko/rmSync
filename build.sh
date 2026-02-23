@@ -223,6 +223,14 @@ fi
 
 step "Launching ${APP_NAME}"
 
+# Kill any running instance so macOS launches the freshly-built version
+if pgrep -f "${APP_NAME}.app" > /dev/null 2>&1; then
+  info "Stopping running ${APP_NAME}…"
+  pkill -f "${APP_NAME}.app" 2>/dev/null || true
+  sleep 0.5
+  ok "Stopped previous instance"
+fi
+
 APP_PATH=""
 for candidate in \
   "$DIST_DIR/mac-arm64/${APP_NAME}.app" \
