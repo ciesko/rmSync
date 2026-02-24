@@ -2,10 +2,14 @@ const { Client } = require('ssh2');
 
 function connect({ host, username, password }) {
   return new Promise((resolve, reject) => {
+    if (!host || typeof host !== 'string') {
+      return reject(new Error(`Invalid host: "${host}"`));
+    }
+
     const conn = new Client();
     const timer = setTimeout(() => {
       conn.end();
-      reject(new Error('Connection timed out'));
+      reject(new Error(`Connection timed out to ${host}:22`));
     }, 15000);
 
     conn.on('ready', () => {

@@ -256,3 +256,9 @@ fi
 
 echo ""
 ok "Done."
+echo ""
+echo -e "${YELLOW}${BOLD}Note:${NC} If you get ${RED}EHOSTUNREACH${NC} when syncing, go to:"
+echo -e "  ${BOLD}System Settings → Privacy & Security → Local Network${NC}"
+echo -e "  and toggle ${BOLD}${APP_NAME}${NC} off then on again."
+echo -e "  This happens because macOS ties the Local Network permission to the"
+echo -e "  app binary, which changes on every rebuild."
