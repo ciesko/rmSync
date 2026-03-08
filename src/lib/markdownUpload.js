@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { marked } = require('marked');
 const PDFDocument = require('pdfkit');
@@ -14,13 +15,19 @@ const RM_WIDTH_PT  = 445.7;
 const RM_HEIGHT_PT = 594.2;
 const MARGIN = 40;
 
+// DejaVu Sans Mono TTF — supports Unicode box-drawing, arrows, etc.
+// Built-in Courier uses WinAnsi encoding which mangles non-Latin chars.
+const FONT_DIR = path.join(__dirname, '..', 'fonts');
+const MONO_REGULAR = path.join(FONT_DIR, 'DejaVuSansMono.ttf');
+const MONO_BOLD    = path.join(FONT_DIR, 'DejaVuSansMono-Bold.ttf');
+
 const FONTS = {
   regular: 'Helvetica',
   bold: 'Helvetica-Bold',
   italic: 'Helvetica-Oblique',
   boldItalic: 'Helvetica-BoldOblique',
-  mono: 'Courier',
-  monoBold: 'Courier-Bold',
+  mono: 'DejaVuMono',
+  monoBold: 'DejaVuMono-Bold',
 };
 
 /** Decode common HTML entities that marked emits. */
@@ -39,6 +46,8 @@ function decodeEntities(str) {
 const HEADING_SIZES = { 1: 22, 2: 18, 3: 15, 4: 13, 5: 12, 6: 11 };
 const BODY_SIZE = 11;
 const CODE_SIZE = 9.5;
+const CODE_MARGIN = 12;       // tighter margins for code blocks (vs 40pt body)
+const MIN_CODE_SIZE = 6;      // smallest readable on 226 DPI e-ink (~19px tall)
 const LINE_GAP = 4;
 
 /**
@@ -74,19 +83,29 @@ function renderTokens(doc, tokens, opts = {}) {
       }
       case 'code': {
         doc.moveDown(0.3);
-        const codeX = MARGIN + indent + 4;
-        const codeW = contentWidth - 8;
-        const startY = doc.y;
-        doc.font(FONTS.mono).fontSize(CODE_SIZE);
         const codeText = decodeEntities(token.text);
-        // Measure height first
+        const codeBoxW = RM_WIDTH_PT - 2 * CODE_MARGIN - indent;
+        const codePad = 4;
+        const codeX = CODE_MARGIN + indent + codePad;
+        const codeW = codeBoxW - 2 * codePad;
+
+        // Auto-shrink: find the widest line and pick a font size that fits
+        doc.font(FONTS.mono).fontSize(CODE_SIZE);
+        const lines = codeText.split('\n');
+        const maxLineW = Math.max(...lines.map(l => doc.widthOfString(l)));
+        let fontSize = CODE_SIZE;
+        if (maxLineW > codeW) {
+          fontSize = Math.max(MIN_CODE_SIZE, CODE_SIZE * (codeW / maxLineW));
+          doc.fontSize(fontSize);
+        }
+
         const textH = doc.heightOfString(codeText, { width: codeW, lineGap: 2 });
         const boxH = textH + 12;
         // Page break if needed
         if (doc.y + boxH > RM_HEIGHT_PT - MARGIN) doc.addPage();
         const boxY = doc.y;
         doc.save()
-           .roundedRect(MARGIN + indent, boxY, contentWidth, boxH, 3)
+           .roundedRect(CODE_MARGIN + indent, boxY, codeBoxW, boxH, 3)
            .fill('#f0f0f0')
            .restore();
         doc.fill('#000').text(codeText, codeX, boxY + 6, {
@@ -282,6 +301,9 @@ function markdownToPdf(markdownSrc) {
       margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
       bufferPages: true,
     });
+
+    doc.registerFont('DejaVuMono', MONO_REGULAR);
+    doc.registerFont('DejaVuMono-Bold', MONO_BOLD);
 
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
