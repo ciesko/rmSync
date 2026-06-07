@@ -540,6 +540,16 @@ html, body {
   border: 1px solid rgba(0,0,0,0.04);
   box-shadow: var(--shadow-paper);
   transform-origin: 0 0;
+  /* Long pages render as a vertical stack of tile canvases. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#page-canvas > canvas {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 #page-placeholder {
@@ -677,7 +687,77 @@ html, body {
 }
 .btn-secondary:active { transform: scale(0.97); }
 
-/* ── Upload Zone ──────────────────────────────────── */
+/* ── Local Network / connection help modal ─────────── */
+
+#netperm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 110;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+#netperm-modal {
+  background: var(--white);
+  border-radius: 14px;
+  padding: 36px 40px;
+  width: 480px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-modal);
+  border: 1px solid rgba(0,0,0,0.04);
+}
+
+#netperm-modal h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+  margin-bottom: 14px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.netperm-reason {
+  font-size: 12px;
+  color: #c44;
+  margin-bottom: 16px;
+  word-break: break-word;
+}
+
+.netperm-lead {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-sec);
+  margin: 14px 0 8px;
+}
+
+.netperm-list {
+  margin: 0 0 4px 18px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.netperm-list li { margin-bottom: 4px; }
+
+.netperm-list code,
+.netperm-reason code {
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.netperm-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  line-height: 1.5;
+}
 
 #upload-zone {
   padding: 14px 16px;

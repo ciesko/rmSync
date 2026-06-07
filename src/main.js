@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const store = require('./lib/store');
 const sync = require('./lib/sync');
@@ -115,24 +115,91 @@ ipcMain.handle('get-page-image', (_, imagePath) => {
   return notes.getPageImage(imagePath);
 });
 
+// Ramer–Douglas–Peucker simplification (iterative to avoid stack overflow on
+// long continuous-write strokes). Drops near-collinear points whose deviation
+// is below EPSILON in .rm coordinate units — visually lossless but cuts the
+// point count (and therefore IPC size + canvas draw calls) substantially.
+const RDP_EPSILON = 1.4;
+
+function decimatePoints(pts) {
+  const n = pts.length;
+  if (n <= 2) return pts;
+
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+
+  const eps2 = RDP_EPSILON * RDP_EPSILON;
+  const stack = [[0, n - 1]];
+
+  while (stack.length) {
+    const [first, last] = stack.pop();
+    if (last - first < 2) continue;
+
+    const ax = pts[first].x, ay = pts[first].y;
+    const bx = pts[last].x,  by = pts[last].y;
+    const dx = bx - ax, dy = by - ay;
+    const segLen2 = dx * dx + dy * dy;
+
+    let maxDist2 = -1;
+    let idx = -1;
+    for (let i = first + 1; i < last; i++) {
+      const px = pts[i].x - ax, py = pts[i].y - ay;
+      let dist2;
+      if (segLen2 === 0) {
+        dist2 = px * px + py * py;
+      } else {
+        const cross = px * dy - py * dx;
+        dist2 = (cross * cross) / segLen2;
+      }
+      if (dist2 > maxDist2) { maxDist2 = dist2; idx = i; }
+    }
+
+    if (maxDist2 > eps2 && idx !== -1) {
+      keep[idx] = 1;
+      stack.push([first, idx], [idx, last]);
+    }
+  }
+
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
 ipcMain.handle('get-page-strokes', (_, rmPath) => {
   const fs = require('fs');
   const buf = fs.readFileSync(rmPath);
   const lines = parseRmFile(buf);
   // Pre-compute rendering props so renderer doesn't need the parser
-  return lines.map((ln) => ({
-    color: colorForId(ln.color),
-    opacity: opacityForTool(ln.tool),
-    tool: ln.tool,
-    thicknessScale: ln.thicknessScale,
-    isEraser: ln.tool === PEN.ERASER || ln.tool === PEN.ERASER_AREA,
-    isHighlighter: ln.tool === PEN.HIGHLIGHTER_1 || ln.tool === PEN.HIGHLIGHTER_2,
-    points: ln.points.map((p) => ({
+  return lines.map((ln) => {
+    let points = ln.points.map((p) => ({
       x: p.x,
       y: p.y,
       w: strokeWidth(p, ln.thicknessScale, ln.tool),
-    })),
-  }));
+    }));
+    points = decimatePoints(points);
+
+    // Pre-compute bounds so the renderer never has to re-scan every point
+    // (used for canvas tiling and per-tile stroke culling).
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    return {
+      color: colorForId(ln.color),
+      opacity: opacityForTool(ln.tool),
+      tool: ln.tool,
+      thicknessScale: ln.thicknessScale,
+      isEraser: ln.tool === PEN.ERASER || ln.tool === PEN.ERASER_AREA,
+      isHighlighter: ln.tool === PEN.HIGHLIGHTER_1 || ln.tool === PEN.HIGHLIGHTER_2,
+      minX, maxX, minY, maxY,
+      points,
+    };
+  });
 });
 
 ipcMain.handle('pick-folder', async () => {
@@ -140,6 +207,18 @@ ipcMain.handle('pick-folder', async () => {
     properties: ['openDirectory', 'createDirectory'],
   });
   return result.filePaths[0] || null;
+});
+
+// Opens the macOS Privacy > Local Network settings pane so the user can
+// (re-)grant rmSync access without hunting through System Settings.
+ipcMain.handle('open-network-settings', async () => {
+  if (process.platform === 'darwin') {
+    await shell.openExternal(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork'
+    );
+    return true;
+  }
+  return false;
 });
 
 ipcMain.handle('pick-pdfs', async () => {

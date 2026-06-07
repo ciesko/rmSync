@@ -9,10 +9,12 @@ contextBridge.exposeInMainWorld('api', {
   getPageImage: (p)     => ipcRenderer.invoke('get-page-image', p),
   getPageStrokes: (p)   => ipcRenderer.invoke('get-page-strokes', p),
   pickFolder:   ()      => ipcRenderer.invoke('pick-folder'),
+  openNetworkSettings: () => ipcRenderer.invoke('open-network-settings'),
   pickPdfs:     ()      => ipcRenderer.invoke('pick-pdfs'),
   uploadPdfs:   (paths) => ipcRenderer.invoke('upload-pdfs', paths),
   deleteDocument: (uuid) => ipcRenderer.invoke('delete-document', uuid),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  platform: process.platform,
   onSyncProgress: (cb)  => ipcRenderer.on('sync-progress', (_, d) => cb(d)),
   onAutoSyncComplete: (cb) => ipcRenderer.on('auto-sync-complete', () => cb()),
 });

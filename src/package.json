@@ -19,6 +19,9 @@
     "npmRebuild": false,
     "mac": {
       "icon": "icon.icns",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "rmSync connects to your reMarkable tablet over your local network (or USB) to sync notes."
+      },
       "target": [
         {
           "target": "dmg",

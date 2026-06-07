@@ -84,7 +84,7 @@
       </header>
       <div id="page-progress"><div id="page-progress-fill"></div></div>
       <div id="page-container">
-        <canvas id="page-canvas" class="hidden" width="1404" height="1872"></canvas>
+        <div id="page-canvas" class="hidden"></div>
         <img id="page-image" alt="Page" class="hidden">
         <p id="page-placeholder" class="hidden">This page hasn't been viewed on your tablet yet.</p>
       </div>
@@ -125,6 +125,37 @@
     <div class="modal-actions">
       <button id="btn-cancel" class="btn-secondary">Cancel</button>
       <button id="btn-save" class="btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Local Network permission / connection help modal -->
+<div id="netperm-overlay" class="hidden">
+  <div id="netperm-modal">
+    <h2>Can't reach your tablet</h2>
+    <p id="netperm-reason" class="netperm-reason"></p>
+
+    <p class="netperm-lead">Check the basics:</p>
+    <ul class="netperm-list">
+      <li>The tablet is plugged in (USB) or on the same Wi-Fi network.</li>
+      <li>The <strong>Host IP</strong> in Settings matches your tablet
+        (USB is usually <code>10.11.99.1</code>).</li>
+    </ul>
+
+    <div id="netperm-mac">
+      <p class="netperm-lead">On macOS, Local Network access may be blocked:</p>
+      <ol class="netperm-list">
+        <li>Open <strong>System Settings → Privacy &amp; Security → Local Network</strong>.</li>
+        <li>Turn <strong>rmSync</strong> on (if already on, toggle it off and back on).</li>
+        <li>Return here and sync again.</li>
+      </ol>
+      <p class="netperm-note">macOS ties this permission to the app's signature, so it can
+        reset after the app is updated or rebuilt.</p>
+    </div>
+
+    <div class="modal-actions">
+      <button id="btn-netperm-open" class="btn-secondary">Open Local Network Settings</button>
+      <button id="btn-netperm-close" class="btn-primary">Got it</button>
     </div>
   </div>
 </div>

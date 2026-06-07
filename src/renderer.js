@@ -11,6 +11,7 @@ let pageDirection = 'right'; // 'left' or 'right'
 let zoomLevel = 1;   // 1 = fit-width (default)
 let savedCollapseState = new Map(); // folder collapse state before search
 let seenPages = new Set();
+let strokeCache = new Map(); // rmPath -> parsed strokes (avoids re-IPC/re-parse)
 let animatingStrokes = false;
 let gridMode = false;
 let temporalMode = false;
@@ -95,6 +96,10 @@ function bindEvents() {
       if (e.key === 'Escape') hideSettings();
       return;
     }
+    if (!$('#netperm-overlay').classList.contains('hidden')) {
+      if (e.key === 'Escape') hideNetPermHelp();
+      return;
+    }
     if (e.key === 'Escape') {
       document.body.classList.remove('focus-mode');
       return;
@@ -135,11 +140,25 @@ function bindEvents() {
   });
   $('#btn-save').addEventListener('click', saveSettings);
 
+  // Local Network / connection help modal
+  if (window.api.platform !== 'darwin') {
+    const macBlock = $('#netperm-mac');
+    if (macBlock) macBlock.classList.add('hidden');
+  }
+  $('#btn-netperm-close').addEventListener('click', hideNetPermHelp);
+  $('#netperm-overlay').addEventListener('click', (e) => {
+    if (e.target === $('#netperm-overlay')) hideNetPermHelp();
+  });
+  $('#btn-netperm-open').addEventListener('click', () => {
+    window.api.openNetworkSettings();
+  });
+
   // Sync progress stream
   window.api.onSyncProgress(onProgress);
 
   // Auto-sync: silently refresh note list
   window.api.onAutoSyncComplete(async () => {
+    strokeCache.clear();
     notes = await window.api.getNotes();
     renderTree();
   });
@@ -244,6 +263,7 @@ async function uploadPdfs(filePaths) {
     await window.api.uploadPdfs(filePaths);
   } catch (err) {
     onUploadProgress({ phase: 'done', message: `Upload failed: ${err.message}`, error: true });
+    if (isLocalNetworkError(err.message)) showNetPermHelp(err.message);
   }
   btn.classList.remove('syncing');
   uploading = false;
@@ -535,15 +555,17 @@ async function showPage(index) {
   // Prefer high-res stroke rendering from .rm file
   if (page.rmPath) {
     try {
-      const strokes = await window.api.getPageStrokes(page.rmPath);
+      let strokes = strokeCache.get(page.rmPath);
+      if (!strokes) {
+        strokes = await window.api.getPageStrokes(page.rmPath);
+        if (gen !== renderGen) return; // stale — user already navigated away
+        strokeCache.set(page.rmPath, strokes);
+      }
       if (gen !== renderGen) return; // stale — user already navigated away
       const pageKey = currentDoc + ':' + index;
-      if (!seenPages.has(pageKey)) {
-        seenPages.add(pageKey);
-        animateStrokes(canvas, strokes, gen);
-      } else {
-        renderStrokes(canvas, strokes);
-      }
+      const animate = !seenPages.has(pageKey);
+      if (animate) seenPages.add(pageKey);
+      drawStrokesProgressive(canvas, strokes, gen, { animate });
       canvas.classList.remove('hidden');
       animatePageEnter(canvas);
       requestAnimationFrame(() => { container.style.opacity = '1'; });
@@ -602,28 +624,40 @@ async function renderGrid() {
     // Try to render a small preview
     if (page.rmPath) {
       try {
-        const strokes = await window.api.getPageStrokes(page.rmPath);
+        let strokes = strokeCache.get(page.rmPath);
+        if (!strokes) {
+          strokes = await window.api.getPageStrokes(page.rmPath);
+          strokeCache.set(page.rmPath, strokes);
+        }
         const miniCanvas = document.createElement('canvas');
         miniCanvas.width = 351; // RM_WIDTH / 4
         miniCanvas.height = 468; // RM_PAGE_HEIGHT / 4
         const ctx = miniCanvas.getContext('2d');
-        
-        // Scale down
+
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, 351, 468);
-        ctx.scale(0.25, 0.25);
-        
-        // Find bounds (same as renderStrokes)
-        let minX = Infinity;
-        const visible = strokes.filter(s => !s.isEraser);
-        for (const s of visible) {
-          for (const p of s.points) {
-            if (p.x < minX) minX = p.x;
+
+        // Fit the preview to the actual content width so wider pages (which
+        // extend past the nominal 1404 px) aren't clipped on the right.
+        let minX = Infinity, maxX = -Infinity;
+        for (const s of strokes) {
+          if (s.isEraser) continue;
+          if (s.minX !== undefined) {
+            if (s.minX < minX) minX = s.minX;
+            if (s.maxX > maxX) maxX = s.maxX;
+          } else {
+            for (const p of s.points) {
+              if (p.x < minX) minX = p.x;
+              if (p.x > maxX) maxX = p.x;
+            }
           }
         }
-        if (!isFinite(minX)) minX = 0;
+        if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
+        const contentW = Math.max(RM_WIDTH, maxX - minX);
+        const scale = 351 / contentW;
+        ctx.scale(scale, scale);
         ctx.translate(-minX, 0);
-        
+
         for (const s of strokes) {
           if (s.isEraser) continue;
           const comp = s.isHighlighter ? 'multiply' : 'source-over';
@@ -683,6 +717,90 @@ async function renderGrid() {
 // the 1872 px viewport.
 const RM_WIDTH = 1404;
 const RM_PAGE_HEIGHT = 1872;
+// Chromium/Skia hard-caps canvas dimensions at 32767 px. Stay well under so
+// long continuous-write pages still render — and tile vertically when needed
+// so we never have to downscale (which would cost rendering quality).
+const MAX_TILE_HEIGHT = 16384;
+
+/**
+ * Configure the page-canvas wrapper as a stack of one or more tile canvases
+ * sized to fit the strokes' bounding box.  Returns the tile array; each entry
+ * has its 2d context pre-translated so callers can draw using the original
+ * stroke coordinates.
+ */
+function setupStrokeTiles(wrapper, visibleStrokes) {
+  let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
+  for (const s of visibleStrokes) {
+    // Use bounds precomputed in the main process; fall back to a point scan.
+    if (s.minX !== undefined) {
+      if (s.minX < minX) minX = s.minX;
+      if (s.maxX > maxX) maxX = s.maxX;
+      if (s.maxY > maxY) maxY = s.maxY;
+    } else {
+      for (const p of s.points) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+  }
+  if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
+
+  // Size the canvas to the actual content width — some pages (e.g. long
+  // continuous-write logs) extend past the nominal 1404 px page, which would
+  // otherwise clip strokes on the right. Pad both sides so edge strokes aren't
+  // cut by their own line width.
+  const PAD = 8;
+  const contentW = maxX - minX;
+  const canvasW = Math.max(RM_WIDTH, Math.ceil(contentW) + PAD * 2);
+  const xShift = -minX + PAD;
+
+  const totalH = Math.ceil(maxY) + 40;
+  const numTiles = Math.max(1, Math.ceil(totalH / MAX_TILE_HEIGHT));
+
+  wrapper.innerHTML = '';
+
+  const tiles = [];
+  for (let i = 0; i < numTiles; i++) {
+    const yStart = i * MAX_TILE_HEIGHT;
+    const yEnd = Math.min(totalH, yStart + MAX_TILE_HEIGHT);
+    const c = document.createElement('canvas');
+    c.width  = canvasW;
+    c.height = yEnd - yStart;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.translate(xShift, -yStart);
+    wrapper.appendChild(c);
+    tiles.push({ ctx, yStart, yEnd });
+  }
+  return tiles;
+}
+
+/** Stroke Y bounds — use values precomputed in main, else scan points. */
+function strokeYBounds(stroke) {
+  if (stroke.minY !== undefined) return { mn: stroke.minY, mx: stroke.maxY };
+  let mn = Infinity, mx = -Infinity;
+  for (const p of stroke.points) {
+    if (p.y < mn) mn = p.y;
+    if (p.y > mx) mx = p.y;
+  }
+  return { mn, mx };
+}
+
+/** Draw a single stroke onto every tile it overlaps. */
+function drawTiled(tiles, stroke, color, opacity, compositeOp) {
+  if (tiles.length === 1) {
+    // Common case: no vertical tiling, skip the bounds check entirely.
+    drawStroke(tiles[0].ctx, stroke, color, opacity, compositeOp);
+    return;
+  }
+  const { mn, mx } = strokeYBounds(stroke);
+  for (const tile of tiles) {
+    if (mx < tile.yStart || mn > tile.yEnd) continue;
+    drawStroke(tile.ctx, stroke, color, opacity, compositeOp);
+  }
+}
 
 // Temporal gradient: cool blue → violet → warm red-orange
 function temporalColor(t) {
@@ -708,67 +826,79 @@ function temporalColor(t) {
   return `rgb(${r},${g},${b})`;
 }
 
-function renderStrokes(canvas, strokes) {
-  // Separate strokes into categories for correct layering.
+// Unified, non-blocking stroke renderer. Draws across requestAnimationFrame
+// frames with a per-frame time budget so the UI never freezes — even for huge
+// continuous-write pages. In animate mode the regular strokes are paced so the
+// whole ink-reveal lasts ~ANIM_TARGET_MS regardless of stroke count; in
+// immediate mode strokes are drawn as fast as the frame budget allows.
+const FRAME_BUDGET_MS = 12;
+const ANIM_TARGET_MS  = 1500;
+
+function drawStrokesProgressive(wrapper, strokes, gen, { animate }) {
   const highlights = [];
   const regular    = [];
   const erasers    = [];
 
   for (const s of strokes) {
-    if (s.isEraser)          erasers.push(s);
+    if (s.isEraser)           erasers.push(s);
     else if (s.isHighlighter) highlights.push(s);
     else                      regular.push(s);
   }
 
-  // Find actual extents (X may be centered or absolute depending on page
-  // type; Y can scroll beyond the default viewport).
-  let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
-  const visibleStrokes = highlights.concat(regular);
-  for (const s of visibleStrokes) {
-    for (const p of s.points) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
+  const tiles = setupStrokeTiles(wrapper, highlights.concat(regular));
+
+  // Highlights (bottom layer) — drawn instantly with 'multiply'.
+  for (const s of highlights) drawTiled(tiles, s, s.color, s.opacity, 'multiply');
+
+  const total = regular.length;
+  const replayBtn = $('#btn-replay');
+
+  // In animate mode, target a fixed total duration (~60fps) so reveal time
+  // doesn't scale with stroke count.
+  const animPerFrame = Math.max(1, Math.ceil(total / (ANIM_TARGET_MS / 16.7)));
+
+  if (animate) {
+    animatingStrokes = true;
+    if (replayBtn) replayBtn.classList.add('animating');
+  }
+
+  const finish = () => {
+    // Erasers (top layer) — remove pixels under their path.
+    for (const s of erasers) drawTiled(tiles, s, '#ffffff', 1.0, 'destination-out');
+    if (animate) {
+      animatingStrokes = false;
+      if (replayBtn) replayBtn.classList.remove('animating');
     }
-  }
-  // Fall back to centered coordinate system when there are no visible strokes
-  if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
+  };
 
-  const canvasH = Math.ceil(maxY) + 40;
+  let i = 0;
+  const step = () => {
+    if (gen !== renderGen) { // stale — user navigated away mid-render
+      if (animate) {
+        animatingStrokes = false;
+        if (replayBtn) replayBtn.classList.remove('animating');
+      }
+      return;
+    }
+    const frameStart = performance.now();
+    let drawnThisFrame = 0;
+    while (i < total) {
+      const s = regular[i];
+      const color = temporalMode
+        ? temporalColor(total > 1 ? i / (total - 1) : 1)
+        : s.color;
+      drawTiled(tiles, s, color, s.opacity, 'source-over');
+      i++;
+      drawnThisFrame++;
+      if (animate && drawnThisFrame >= animPerFrame) break;
+      if (performance.now() - frameStart >= FRAME_BUDGET_MS) break;
+    }
+    if (i < total) requestAnimationFrame(step);
+    else finish();
+  };
 
-  canvas.width = RM_WIDTH;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext('2d');
-
-  // Paper background
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, RM_WIDTH, canvasH);
-
-  // Shift so that the leftmost stroke aligns to the canvas edge.
-  ctx.save();
-  ctx.translate(-minX, 0);
-
-  // ── Render in three passes for correct visual layering ──
-  //
-  // Pass 1: Highlights (bottom layer) — use 'multiply' so underlying
-  //         strokes remain visible through the highlight wash.
-  for (const stroke of highlights) {
-    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'multiply');
-  }
-
-  // Pass 2: Regular pen strokes (middle layer) — on top of highlights
-  for (let i = 0; i < regular.length; i++) {
-    const stroke = regular[i];
-    const color = temporalMode ? temporalColor(regular.length > 1 ? i / (regular.length - 1) : 1) : stroke.color;
-    drawStroke(ctx, stroke, color, stroke.opacity, 'source-over');
-  }
-
-  // Pass 3: Erasers (top layer) — removes both pen strokes and highlights
-  for (const stroke of erasers) {
-    drawStroke(ctx, stroke, '#ffffff', 1.0, 'destination-out');
-  }
-
-  ctx.restore();
+  if (total === 0) finish();
+  else requestAnimationFrame(step);
 }
 
 function drawStroke(ctx, stroke, color, opacity, compositeOp) {
@@ -791,109 +921,43 @@ function drawStroke(ctx, stroke, color, opacity, compositeOp) {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // Draw with variable-width segments using quadratic curves
-  for (let i = 0; i < pts.length - 1; i++) {
+  // Variable-width strokes are drawn as a chain of quadratic curves. To avoid a
+  // beginPath()/stroke() per segment (hundreds of thousands on big pages), batch
+  // consecutive segments whose width rounds to the same 0.5 px bucket into one
+  // path and stroke once — visually identical, far fewer canvas calls.
+  const QUANT = 0.5;
+  const n = pts.length;
+  const bucketOf = (w) => Math.max(1, Math.round(w / QUANT));
+
+  let curBucket = bucketOf((pts[0].w + pts[1].w) / 2);
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+
+  for (let i = 0; i < n - 1; i++) {
     const p0 = pts[i];
     const p1 = pts[i + 1];
-    const w = (p0.w + p1.w) / 2;
-
-    ctx.lineWidth = w;
-    ctx.beginPath();
-
-    if (i === 0) {
-      ctx.moveTo(p0.x, p0.y);
-    } else {
-      const prev = pts[i - 1];
-      ctx.moveTo((prev.x + p0.x) / 2, (prev.y + p0.y) / 2);
+    const b = bucketOf((p0.w + p1.w) / 2);
+    if (b !== curBucket) {
+      // Flush the accumulated path, then resume from this segment's start
+      // point (which is exactly where the previous segment ended).
+      ctx.lineWidth = curBucket * QUANT;
+      ctx.stroke();
+      ctx.beginPath();
+      if (i === 0) ctx.moveTo(p0.x, p0.y);
+      else ctx.moveTo((pts[i - 1].x + p0.x) / 2, (pts[i - 1].y + p0.y) / 2);
+      curBucket = b;
     }
-
-    // Quadratic curve through current point to midpoint with next
-    const mx = (p0.x + p1.x) / 2;
-    const my = (p0.y + p1.y) / 2;
-    ctx.quadraticCurveTo(p0.x, p0.y, mx, my);
-    ctx.stroke();
+    ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
   }
 
-  // Final segment to last point
-  const last = pts[pts.length - 1];
-  const prev = pts[pts.length - 2];
-  ctx.lineWidth = last.w;
-  ctx.beginPath();
-  ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
-  ctx.lineTo(last.x, last.y);
+  // Final point.
+  ctx.lineTo(pts[n - 1].x, pts[n - 1].y);
+  ctx.lineWidth = curBucket * QUANT;
   ctx.stroke();
 
   // Reset
   ctx.globalAlpha = 1.0;
   ctx.globalCompositeOperation = 'source-over';
-}
-
-async function animateStrokes(canvas, strokes, gen) {
-  const highlights = [];
-  const regular    = [];
-  const erasers    = [];
-
-  for (const s of strokes) {
-    if (s.isEraser)          erasers.push(s);
-    else if (s.isHighlighter) highlights.push(s);
-    else                      regular.push(s);
-  }
-
-  const visibleStrokes = highlights.concat(regular);
-
-  let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
-  for (const s of visibleStrokes) {
-    for (const p of s.points) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-  }
-  if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
-
-  const canvasH = Math.ceil(maxY) + 40;
-  canvas.width = RM_WIDTH;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext('2d');
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, RM_WIDTH, canvasH);
-  ctx.save();
-  ctx.translate(-minX, 0);
-
-  // Draw highlights instantly (fast, bottom layer)
-  for (const stroke of highlights) {
-    drawStroke(ctx, stroke, stroke.color, stroke.opacity, 'multiply');
-  }
-
-  // Animate regular strokes
-  const totalStrokes = regular.length;
-  const rawDelay = totalStrokes > 0 ? 600 / totalStrokes : 0;
-  const delay = Math.max(2, Math.min(15, rawDelay));
-
-  animatingStrokes = true;
-  const replayBtn = $('#btn-replay');
-  if (replayBtn) replayBtn.classList.add('animating');
-
-  for (let i = 0; i < regular.length; i++) {
-    if (gen !== renderGen) {
-      animatingStrokes = false;
-      if (replayBtn) replayBtn.classList.remove('animating');
-      return;
-    }
-    const color = temporalMode ? temporalColor(regular.length > 1 ? i / (regular.length - 1) : 1) : regular[i].color;
-    drawStroke(ctx, regular[i], color, regular[i].opacity, 'source-over');
-    await new Promise(r => setTimeout(r, delay));
-  }
-
-  // Apply erasers instantly at the end
-  for (const stroke of erasers) {
-    drawStroke(ctx, stroke, '#ffffff', 1.0, 'destination-out');
-  }
-
-  ctx.restore();
-  animatingStrokes = false;
-  if (replayBtn) replayBtn.classList.remove('animating');
 }
 
 // ── Sync ────────────────────────────────────────────
@@ -919,6 +983,7 @@ async function doSync() {
   let syncError = false;
   try {
     await window.api.syncNotes();
+    strokeCache.clear();
     await refreshNotes();
     // Re-open current doc if still exists
     if (currentDoc) {
@@ -928,6 +993,7 @@ async function doSync() {
   } catch (err) {
     syncError = true;
     status.innerHTML = `<span style="color:#c44">${esc(err.message)}</span>`;
+    if (isLocalNetworkError(err.message)) showNetPermHelp(err.message);
   } finally {
     syncing = false;
     btn.classList.remove('syncing');
@@ -995,6 +1061,23 @@ async function showSettings() {
 
 function hideSettings() {
   $('#settings-overlay').classList.add('hidden');
+}
+
+// Connection failures that typically mean the tablet is unreachable or macOS
+// is blocking Local Network access.
+function isLocalNetworkError(message) {
+  return /EHOSTDOWN|EHOSTUNREACH|ENETUNREACH|ENETDOWN|ETIMEDOUT|ECONNREFUSED|timed out/i
+    .test(message || '');
+}
+
+function showNetPermHelp(message) {
+  const reason = $('#netperm-reason');
+  if (reason) reason.textContent = message ? `Error: ${message}` : '';
+  $('#netperm-overlay').classList.remove('hidden');
+}
+
+function hideNetPermHelp() {
+  $('#netperm-overlay').classList.add('hidden');
 }
 
 async function saveSettings() {
