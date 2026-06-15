@@ -222,6 +222,22 @@ html, body {
   border-radius: 2px;
 }
 
+.tree-label.folder-target {
+  background: var(--accent-subtle);
+}
+.tree-label.folder-target::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.tree-label.folder-target .tree-icon { color: var(--accent); }
+
 .tree-chevron {
   width: 16px;
   font-size: 12px;
@@ -764,6 +780,38 @@ html, body {
   flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
+
+#upload-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-sec);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#upload-target .upload-target-label { color: var(--text-muted); flex-shrink: 0; }
+#upload-target .upload-target-name {
+  color: var(--accent);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#upload-target-reset {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease);
+}
+#upload-target-reset:hover { background: var(--bg-hover); color: var(--text); }
 
 #upload-droparea {
   border: none;

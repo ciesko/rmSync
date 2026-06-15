@@ -11,6 +11,9 @@ function extractPageEntries(content) {
         idx: page?.idx?.value,
         order: index,
         deleted: !!page?.deleted?.value,
+        // redir.value = 0-based index of the source PDF page that backs this
+        // page (present only for PDF-backed documents).
+        pdfPage: page?.redir?.value,
       }))
       .filter((page) => page.id && !page.deleted)
       .sort((left, right) => {
@@ -108,10 +111,12 @@ function getDocumentPages(storagePath, uuid) {
 
   const pageEntries = extractPageEntries(content);
   const pageIds = pageEntries.map((page) => page.id);
+  const pdfPageMap = pageEntries.map((page) => page.pdfPage);
   const count = Math.max(content.pageCount || 0, pageIds.length, 1);
 
   for (let i = 0; i < count; i++) {
     const page = { index: i, id: pageIds[i] || null };
+    if (typeof pdfPageMap[i] === 'number') page.pdfPage = pdfPageMap[i];
 
     // Thumbnail — try page-UUID then index naming, both .png and .jpg
     const thumbDir = path.join(rawDir, uuid + '.thumbnails');

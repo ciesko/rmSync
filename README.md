@@ -31,7 +31,11 @@ After the first sync, rmSync auto-syncs every hour in the background. If your ta
 
 🖊️ **Pixel-perfect note rendering** — pressure, tilt, all pen types, highlighters, erasers. Parsed directly from the v6 binary format.
 
-📄 **PDF upload** — drag PDFs into the sidebar to send them to your tablet.
+📄 **Annotated PDFs** — PDF-backed pages render the original document text crisply beneath your handwritten annotations, not just the ink.
+
+📤 **PDF & Markdown upload** — drag PDFs or Markdown files into the sidebar to send them to your tablet (Markdown is converted to PDF on the way).
+
+📁 **Folders** — your tablet's folder structure is mirrored in the sidebar; click a folder to make it the upload destination.
 
 🔍 **Trackpad zoom & pan** — pinch-to-zoom and two-finger scroll, native macOS feel.
 
@@ -83,6 +87,8 @@ Contributions welcome — keep them lean. No frameworks, no build tools, vanilla
 ## License
 
 [MIT](LICENSE)
+
+Bundles [pdf.js](https://github.com/mozilla/pdf.js) (Mozilla Foundation, Apache-2.0) for PDF rendering — see [`src/vendor/`](src/vendor/).
 
 ---
 

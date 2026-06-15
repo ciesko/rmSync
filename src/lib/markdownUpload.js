@@ -43,12 +43,127 @@ function decodeEntities(str) {
     .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)));
 }
 
+/**
+ * Decode entities and collapse markdown soft line breaks.
+ * Editors hard-wrap source at ~80 cols; in markdown a single newline inside a
+ * paragraph is a space, not a line break. Genuine hard breaks arrive as separate
+ * `br` tokens, so collapsing `\n` here is safe.
+ */
+function inlineText(str) {
+  return decodeEntities(str).replace(/[ \t]*\n[ \t]*/g, ' ');
+}
+
+// --- Image embedding -------------------------------------------------------
+const IMG_TIMEOUT_MS = 8000;
+const IMG_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Identify embeddable formats by magic bytes (PDFKit supports PNG + JPEG). */
+function isEmbeddableImage(buf) {
+  if (!buf || buf.length < 4) return false;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true; // PNG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true;                    // JPEG
+  return false;
+}
+
+/**
+ * Load a single image to a Buffer, or null on any failure. Never throws.
+ * Remote: fetch with timeout + size cap. Local: read relative to the md file.
+ */
+async function fetchImage(href, mdDir) {
+  try {
+    let buf;
+    if (/^https?:\/\//i.test(href)) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), IMG_TIMEOUT_MS);
+      try {
+        const res = await fetch(href, { signal: ctrl.signal, redirect: 'follow' });
+        if (!res.ok) return null;
+        buf = Buffer.from(await res.arrayBuffer());
+      } finally {
+        clearTimeout(timer);
+      }
+    } else {
+      const clean = href.replace(/^file:\/\//, '').replace(/[?#].*$/, '');
+      const resolved = path.isAbsolute(clean) ? clean : path.resolve(mdDir || '.', clean);
+      buf = await fs.promises.readFile(resolved);
+    }
+    if (!buf || buf.length === 0 || buf.length > IMG_MAX_BYTES) return null;
+    if (!isEmbeddableImage(buf)) return null;
+    return buf;
+  } catch (err) {
+    console.warn(`[markdownUpload] image skipped (${href}): ${err.message}`);
+    return null;
+  }
+}
+
+/** Recursively collect every image href in the token tree. */
+function collectImageHrefs(tokens, set = new Set()) {
+  if (!tokens) return set;
+  for (const t of tokens) {
+    if (t.type === 'image' && t.href) set.add(t.href);
+    if (t.tokens) collectImageHrefs(t.tokens, set);
+    if (t.items) collectImageHrefs(t.items, set);
+    if (t.header) collectImageHrefs(t.header, set);
+    if (t.rows) for (const row of t.rows) collectImageHrefs(row, set);
+  }
+  return set;
+}
+
+/** Prefetch all images into a Map<href, Buffer|null>. One bad image is isolated. */
+async function loadImages(tokens, mdDir) {
+  const cache = new Map();
+  const hrefs = [...collectImageHrefs(tokens)];
+  await Promise.all(hrefs.map(async (h) => { cache.set(h, await fetchImage(h, mdDir)); }));
+  return cache;
+}
+
+/** Draw an embedded image as a centered block, preserving aspect ratio.
+ *  Returns true on success, false if PDFKit rejects the image (caller falls back). */
+function drawImageBlock(doc, buf, x, width) {
+  const maxH = RM_HEIGHT_PT - 2 * MARGIN;
+  let drawW = width, drawH = Math.min(width, maxH);
+  try {
+    const img = doc.openImage(buf);
+    if (img && img.width && img.height) {
+      const scale = Math.min(width / img.width, maxH / img.height, 1);
+      drawW = img.width * scale;
+      drawH = img.height * scale;
+    }
+  } catch {
+    return false;
+  }
+
+  const prevY = doc.y;
+  doc.moveDown(0.2);
+  if (doc.y + drawH > RM_HEIGHT_PT - MARGIN) doc.addPage();
+  const y = doc.y;
+  const drawX = x + Math.max(0, (width - drawW) / 2);
+  try {
+    doc.image(buf, drawX, y, { width: drawW, height: drawH });
+  } catch {
+    doc.y = prevY;
+    return false;
+  }
+  doc.y = y + drawH;
+  doc.moveDown(0.4);
+  return true;
+}
+
 const HEADING_SIZES = { 1: 22, 2: 18, 3: 15, 4: 13, 5: 12, 6: 11 };
 const BODY_SIZE = 11;
 const CODE_SIZE = 9.5;
 const CODE_MARGIN = 12;       // tighter margins for code blocks (vs 40pt body)
 const MIN_CODE_SIZE = 6;      // smallest readable on 226 DPI e-ink (~19px tall)
 const LINE_GAP = 4;
+
+/** Extract plain text from a table cell, preferring decoded inline text over raw
+ *  markdown (so images render as alt text, not `![...](...)`). */
+function cellText(cell) {
+  if (cell.tokens && cell.tokens.length) {
+    return inlineText(cell.tokens.map(t => t.text || t.raw || '').join(''));
+  }
+  return inlineText(cell.text || '');
+}
 
 /**
  * Render markdown tokens into a PDFKit document.
@@ -178,7 +293,7 @@ function renderTokens(doc, tokens, opts = {}) {
           doc.font(isHeader ? FONTS.bold : FONTS.regular).fontSize(BODY_SIZE - 1);
           let maxH = 14;
           for (let c = 0; c < cells.length; c++) {
-            const text = cells[c].text || (cells[c].tokens ? cells[c].tokens.map(t => t.raw || t.text || '').join('') : '');
+            const text = cellText(cells[c]);
             const h = doc.heightOfString(text, { width: colW - 2 * cellPad }) + 2 * cellPad;
             if (h > maxH) maxH = h;
           }
@@ -189,7 +304,7 @@ function renderTokens(doc, tokens, opts = {}) {
           }
           doc.fill('#000');
           for (let c = 0; c < cells.length; c++) {
-            const text = cells[c].text || (cells[c].tokens ? cells[c].tokens.map(t => t.raw || t.text || '').join('') : '');
+            const text = cellText(cells[c]);
             doc.text(text, MARGIN + indent + c * colW + cellPad, finalY + cellPad, {
               width: colW - 2 * cellPad, lineGap: 1,
             });
@@ -232,22 +347,41 @@ function renderTokens(doc, tokens, opts = {}) {
   }
 }
 
-/** Render inline tokens (bold, italic, code, links, plain text). */
+/** Render inline tokens (bold, italic, code, links, images, plain text). */
 function renderInline(doc, tokens, width, indent) {
   if (!tokens || tokens.length === 0) return;
   const x = MARGIN + (indent || 0);
-  const parts = flattenInline(tokens);
-  // Build a single text block with font switches
-  let first = true;
-  for (const part of parts) {
+  const cache = doc._imageCache;
+
+  // Resolve image parts to either an embedded block or an alt/link text fallback.
+  const parts = [];
+  for (const p of flattenInline(tokens)) {
+    if (p.image) {
+      const buf = cache ? cache.get(p.href) : null;
+      if (buf) { parts.push({ block: buf, alt: p.alt, href: p.href, font: p.font, size: p.size }); continue; }
+      parts.push({ text: p.alt || p.href, font: p.font, size: p.size, link: p.href });
+    } else {
+      parts.push(p);
+    }
+  }
+
+  let startRun = true;
+  for (let i = 0; i < parts.length; i++) {
+    let part = parts[i];
+    if (part.block) {
+      if (drawImageBlock(doc, part.block, x, width)) { startRun = true; continue; }
+      // PDFKit rejected the image — degrade to alt text / link.
+      part = { text: part.alt || part.href, font: part.font, size: part.size, link: part.href };
+    }
+    const next = parts[i + 1];
+    const continued = !!(next && !next.block);
     doc.font(part.font).fontSize(part.size);
-    const isLast = part === parts[parts.length - 1];
-    doc.text(part.text, first ? x : undefined, first ? doc.y : undefined, {
-      width, continued: !isLast, lineGap: LINE_GAP,
+    doc.text(part.text, startRun ? x : undefined, startRun ? doc.y : undefined, {
+      width, continued, lineGap: LINE_GAP,
       link: part.link || undefined,
       underline: !!part.link,
     });
-    first = false;
+    startRun = false;
   }
 }
 
@@ -260,7 +394,7 @@ function flattenInline(tokens, parentFont) {
         if (t.tokens) {
           parts.push(...flattenInline(t.tokens, font));
         } else {
-          parts.push({ text: decodeEntities(t.text), font, size: BODY_SIZE });
+          parts.push({ text: inlineText(t.text), font, size: BODY_SIZE });
         }
         break;
       case 'strong':
@@ -275,14 +409,17 @@ function flattenInline(tokens, parentFont) {
       case 'link':
         parts.push(...flattenInline(t.tokens, font).map(p => ({ ...p, link: t.href })));
         break;
+      case 'image':
+        parts.push({ image: true, href: t.href, alt: t.text || '', font, size: BODY_SIZE });
+        break;
       case 'del':
-        parts.push({ text: decodeEntities(t.text || (t.tokens ? t.tokens.map(x => x.text || x.raw || '').join('') : '')), font, size: BODY_SIZE });
+        parts.push({ text: inlineText(t.text || (t.tokens ? t.tokens.map(x => x.text || x.raw || '').join('') : '')), font, size: BODY_SIZE });
         break;
       case 'br':
         parts.push({ text: '\n', font, size: BODY_SIZE });
         break;
       default:
-        if (t.raw) parts.push({ text: decodeEntities(t.raw), font, size: BODY_SIZE });
+        if (t.raw) parts.push({ text: inlineText(t.raw), font, size: BODY_SIZE });
         break;
     }
   }
@@ -293,14 +430,17 @@ function flattenInline(tokens, parentFont) {
  * Convert markdown string to a PDF Buffer.
  * Pure JS — uses marked for parsing, PDFKit for PDF generation.
  */
-function markdownToPdf(markdownSrc) {
+async function markdownToPdf(markdownSrc, mdDir) {
+  const tokens = marked.lexer(markdownSrc);
+  const imageCache = await loadImages(tokens, mdDir);
+
   return new Promise((resolve, reject) => {
-    const tokens = marked.lexer(markdownSrc);
     const doc = new PDFDocument({
       size: [RM_WIDTH_PT, RM_HEIGHT_PT],
       margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
       bufferPages: true,
     });
+    doc._imageCache = imageCache;
 
     doc.registerFont('DejaVuMono', MONO_REGULAR);
     doc.registerFont('DejaVuMono-Bold', MONO_BOLD);
@@ -315,7 +455,7 @@ function markdownToPdf(markdownSrc) {
   });
 }
 
-function buildMetadata(visibleName) {
+function buildMetadata(visibleName, parent) {
   const now = Date.now().toString();
   return JSON.stringify({
     createdTime: now,
@@ -323,7 +463,7 @@ function buildMetadata(visibleName) {
     lastOpened: '',
     lastOpenedPage: 0,
     new: true,
-    parent: '',
+    parent: parent || '',
     pinned: false,
     source: '',
     type: 'DocumentType',
@@ -355,9 +495,9 @@ function buildContent(fileSize) {
  * Convert a markdown file to PDF and upload to the reMarkable.
  * Pure JS conversion (marked + pdfkit), streamed to device via SFTP.
  */
-async function uploadMarkdown(conn, sftp, mdFilePath, visibleName) {
+async function uploadMarkdown(conn, sftp, mdFilePath, visibleName, parent) {
   const src = fs.readFileSync(mdFilePath, 'utf-8');
-  const pdfBuffer = await markdownToPdf(src);
+  const pdfBuffer = await markdownToPdf(src, path.dirname(mdFilePath));
 
   const id = crypto.randomUUID();
   const remotePdf      = `${REMOTE_PATH}/${id}.pdf`;
@@ -367,7 +507,7 @@ async function uploadMarkdown(conn, sftp, mdFilePath, visibleName) {
   try {
     await ssh.writeFile(sftp, remotePdf, pdfBuffer);
     await ssh.writeFile(sftp, remoteContent, buildContent(pdfBuffer.length));
-    await ssh.writeFile(sftp, remoteMetadata, buildMetadata(visibleName));
+    await ssh.writeFile(sftp, remoteMetadata, buildMetadata(visibleName, parent));
   } catch (err) {
     try {
       await ssh.exec(conn, `rm -f ${remotePdf} ${remoteContent} ${remoteMetadata}`);
@@ -378,5 +518,5 @@ async function uploadMarkdown(conn, sftp, mdFilePath, visibleName) {
   return { id, visibleName };
 }
 
-module.exports = { uploadMarkdown };
+module.exports = { uploadMarkdown, markdownToPdf };
 

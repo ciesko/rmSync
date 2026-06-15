@@ -10,8 +10,11 @@ let renderGen = 0;
 let pageDirection = 'right'; // 'left' or 'right'
 let zoomLevel = 1;   // 1 = fit-width (default)
 let savedCollapseState = new Map(); // folder collapse state before search
+let activeFolderUuid = ''; // upload destination ('' = root / My files)
 let seenPages = new Set();
 let strokeCache = new Map(); // rmPath -> parsed strokes (avoids re-IPC/re-parse)
+let pdfBytesCache = new Map(); // uuid -> Uint8Array of source PDF (per open doc)
+let pdfBgCache = new Map();    // 'uuid:pageIndex' -> rendered background bitmap
 let animatingStrokes = false;
 let gridMode = false;
 let temporalMode = false;
@@ -60,6 +63,7 @@ function bindEvents() {
       const children = label.nextElementSibling;
       chevron.classList.toggle('expanded');
       children.classList.toggle('collapsed');
+      setUploadTarget(label.dataset.uuid);
     } else if (label.dataset.action === 'doc') {
       openDocument(label.dataset.uuid, label);
     }
@@ -240,6 +244,11 @@ function bindEvents() {
     if (paths && paths.length > 0) uploadPdfs(paths);
   });
 
+  // Upload destination reset (delegated — the target line is re-rendered)
+  $('#upload-target').addEventListener('click', (e) => {
+    if (e.target.closest('#upload-target-reset')) setUploadTarget('');
+  });
+
   // Search / filter
   const searchInput = $('#search-input');
   if (searchInput) {
@@ -260,7 +269,7 @@ async function uploadPdfs(filePaths) {
   us.textContent = 'Uploading…';
 
   try {
-    await window.api.uploadPdfs(filePaths);
+    await window.api.uploadPdfs(filePaths, activeFolderUuid);
   } catch (err) {
     onUploadProgress({ phase: 'done', message: `Upload failed: ${err.message}`, error: true });
     if (isLocalNetworkError(err.message)) showNetPermHelp(err.message);
@@ -298,27 +307,54 @@ async function deleteDocument(uuid, name) {
 
 async function refreshNotes() {
   try { notes = await window.api.getNotes(); } catch { notes = []; }
+  // Drop the upload target if its folder no longer exists on the device.
+  if (activeFolderUuid && !findFolder(notes, activeFolderUuid)) {
+    activeFolderUuid = '';
+  }
   renderTree();
+  updateUploadTargetUI();
 }
 
-/** Recursively collect all PDFs from the tree, removing them from their folders. */
-function extractPdfs(items) {
-  const pdfs = [];
-  const rest = [];
+/** Recursively find a folder node by uuid in the notes tree. */
+function findFolder(items, uuid) {
   for (const item of items) {
-    if (item.type !== 'CollectionType' && item.fileType === 'pdf') {
-      pdfs.push(item);
-    } else if (item.type === 'CollectionType' && item.children) {
-      const childPdfs = extractPdfs(item.children);
-      pdfs.push(...childPdfs.pdfs);
-      const folder = { ...item, children: childPdfs.rest };
-      // Keep folder only if it still has non-PDF children
-      if (folder.children.length > 0) rest.push(folder);
-    } else {
-      rest.push(item);
+    if (item.type === 'CollectionType') {
+      if (item.uuid === uuid) return item;
+      if (item.children) {
+        const hit = findFolder(item.children, uuid);
+        if (hit) return hit;
+      }
     }
   }
-  return { pdfs, rest };
+  return null;
+}
+
+/** Set the active upload destination folder ('' clears back to root). */
+function setUploadTarget(uuid) {
+  activeFolderUuid = uuid || '';
+  // Update folder-target highlight without a full re-render.
+  document.querySelectorAll('.tree-label.folder-target')
+    .forEach((el) => el.classList.remove('folder-target'));
+  if (activeFolderUuid) {
+    const el = document.querySelector(
+      `.tree-label[data-action="folder"][data-uuid="${activeFolderUuid}"]`);
+    if (el) el.classList.add('folder-target');
+  }
+  updateUploadTargetUI();
+}
+
+/** Reflect the current upload destination in the upload zone. */
+function updateUploadTargetUI() {
+  const el = $('#upload-target');
+  if (!el) return;
+  const folder = activeFolderUuid ? findFolder(notes, activeFolderUuid) : null;
+  const name = folder ? folder.name : 'My files';
+  el.innerHTML =
+    `<span class="upload-target-label">Upload to:</span> ` +
+    `<span class="upload-target-name">${esc(name)}</span>` +
+    (activeFolderUuid
+      ? ` <button id="upload-target-reset" title="Upload to root instead">✕</button>`
+      : '');
 }
 
 function renderTree() {
@@ -327,13 +363,14 @@ function renderTree() {
     tree.innerHTML = '<div class="tree-empty">No notes synced</div>';
     return;
   }
-  const { rest, pdfs } = extractPdfs(notes);
-  let html = buildItems(rest);
-  if (pdfs.length) {
-    html += `<div class="tree-section-label">PDFs</div>`;
-    html += buildItems(pdfs);
+  tree.innerHTML = buildItems(notes);
+
+  // Re-apply the active upload-target highlight after rebuild.
+  if (activeFolderUuid) {
+    const el = tree.querySelector(
+      `.tree-label[data-action="folder"][data-uuid="${activeFolderUuid}"]`);
+    if (el) el.classList.add('folder-target');
   }
-  tree.innerHTML = html;
 
   // Re-apply search filter if active
   const searchInput = $('#search-input');
@@ -442,7 +479,7 @@ function buildItems(items) {
     if (item.type === 'CollectionType') {
       return `
         <div class="tree-item">
-          <div class="tree-label" data-action="folder">
+          <div class="tree-label" data-action="folder" data-uuid="${item.uuid}">
             <span class="tree-chevron">›</span>
             ${ICON.folder}
             <span class="tree-name">${esc(item.name)}</span>
@@ -476,6 +513,14 @@ async function openDocument(uuid, labelEl) {
   $('#tree').querySelectorAll('.tree-label.selected')
     .forEach((el) => el.classList.remove('selected'));
   if (labelEl) labelEl.classList.add('selected');
+
+  // Drop cached PDF backgrounds from the previously open document to free
+  // memory (bitmaps are large) and release the parsed PDFDocumentProxy.
+  if (currentDoc && currentDoc !== uuid && window.rmPdf) {
+    try { window.rmPdf.dispose(currentDoc); } catch {}
+  }
+  pdfBgCache.clear();
+  pdfBytesCache.clear();
 
   currentDoc = uuid;
   currentPage = 0;
@@ -562,14 +607,36 @@ async function showPage(index) {
         strokeCache.set(page.rmPath, strokes);
       }
       if (gen !== renderGen) return; // stale — user already navigated away
+      // For PDF-backed pages, render the source page as a crisp background so
+      // the document text/content shows beneath the annotation strokes.
+      const background = await loadPageBackground(currentDoc, page);
+      if (gen !== renderGen) return;
       const pageKey = currentDoc + ':' + index;
       const animate = !seenPages.has(pageKey);
       if (animate) seenPages.add(pageKey);
-      drawStrokesProgressive(canvas, strokes, gen, { animate });
+      drawStrokesProgressive(canvas, strokes, gen, { animate, background });
       canvas.classList.remove('hidden');
       animatePageEnter(canvas);
       requestAnimationFrame(() => { container.style.opacity = '1'; });
       return;
+    } catch {
+      if (gen !== renderGen) return;
+    }
+  }
+
+  // No annotations, but a source PDF page exists — render it crisply too
+  // (sharper than the low-res thumbnail / cache fallback below).
+  if (page.pdfPath && typeof page.pdfPage === 'number') {
+    try {
+      const background = await loadPageBackground(currentDoc, page);
+      if (gen !== renderGen) return;
+      if (background) {
+        drawStrokesProgressive(canvas, [], gen, { animate: false, background });
+        canvas.classList.remove('hidden');
+        animatePageEnter(canvas);
+        requestAnimationFrame(() => { container.style.opacity = '1'; });
+        return;
+      }
     } catch {
       if (gen !== renderGen) return;
     }
@@ -717,6 +784,37 @@ async function renderGrid() {
 // the 1872 px viewport.
 const RM_WIDTH = 1404;
 const RM_PAGE_HEIGHT = 1872;
+// Render PDF backgrounds at 2× device resolution so text stays crisp when the
+// page is zoomed in.
+const PDF_BG_SCALE = 2;
+
+/**
+ * For a PDF-backed page, fetch the source PDF bytes (once per document) and
+ * render the backing page to a bitmap. Returns null for native/blank pages or
+ * if the pdf.js module isn't available. Results are cached per page.
+ */
+async function loadPageBackground(uuid, page) {
+  if (!uuid || !page || !page.pdfPath || typeof page.pdfPage !== 'number') return null;
+  if (!window.rmPdf) return null;
+  const key = uuid + ':' + page.index;
+  if (pdfBgCache.has(key)) return pdfBgCache.get(key);
+  try {
+    let bytes = pdfBytesCache.get(uuid);
+    if (!bytes) {
+      const buf = await window.api.getPdfBytes(page.pdfPath);
+      if (!buf) return null;
+      bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      pdfBytesCache.set(uuid, bytes);
+    }
+    const bg = await window.rmPdf.renderPage(uuid, bytes, page.pdfPage, RM_WIDTH * PDF_BG_SCALE);
+    pdfBgCache.set(key, bg);
+    return bg;
+  } catch {
+    return null;
+  }
+}
+
+
 // Chromium/Skia hard-caps canvas dimensions at 32767 px. Stay well under so
 // long continuous-write pages still render — and tile vertically when needed
 // so we never have to downscale (which would cost rendering quality).
@@ -728,7 +826,7 @@ const MAX_TILE_HEIGHT = 16384;
  * has its 2d context pre-translated so callers can draw using the original
  * stroke coordinates.
  */
-function setupStrokeTiles(wrapper, visibleStrokes) {
+function setupStrokeTiles(wrapper, visibleStrokes, background) {
   let minX = Infinity, maxX = -Infinity, maxY = RM_PAGE_HEIGHT;
   for (const s of visibleStrokes) {
     // Use bounds precomputed in the main process; fall back to a point scan.
@@ -745,6 +843,14 @@ function setupStrokeTiles(wrapper, visibleStrokes) {
     }
   }
   if (!isFinite(minX)) { minX = 0; maxX = RM_WIDTH; }
+
+  // When a PDF page is drawn underneath, make sure the canvas spans the full
+  // device page width (-702..702) so the background isn't clipped where the
+  // strokes don't reach the page edges.
+  if (background) {
+    minX = Math.min(minX, -RM_WIDTH / 2);
+    maxX = Math.max(maxX, RM_WIDTH / 2);
+  }
 
   // Size the canvas to the actual content width — some pages (e.g. long
   // continuous-write logs) extend past the nominal 1404 px page, which would
@@ -774,7 +880,40 @@ function setupStrokeTiles(wrapper, visibleStrokes) {
     wrapper.appendChild(c);
     tiles.push({ ctx, yStart, yEnd });
   }
+
+  // Draw the PDF page background (contain-fit, centered horizontally at X=0)
+  // beneath the strokes. The page region [0,1872] sits entirely within the
+  // first tile, so draw it there.
+  if (background && tiles.length) {
+    drawPageBackground(tiles[0].ctx, background);
+  }
   return tiles;
+}
+
+/**
+ * Draw a rendered PDF bitmap into stroke (device) coordinates: width is fit to
+ * the 1404 px page, height follows the bitmap aspect, centered on X=0 and
+ * vertically within the 1872 px page. App-generated PDFs (aspect 0.75) fill
+ * exactly; other aspect ratios are letter/pillar-boxed.
+ */
+function drawPageBackground(ctx, bg) {
+  const aspect = bg.width / bg.height;
+  const pageAspect = RM_WIDTH / RM_PAGE_HEIGHT;
+  let drawW, drawH;
+  if (aspect > pageAspect) {
+    drawW = RM_WIDTH;
+    drawH = RM_WIDTH / aspect;
+  } else {
+    drawH = RM_PAGE_HEIGHT;
+    drawW = RM_PAGE_HEIGHT * aspect;
+  }
+  const x0 = -drawW / 2;
+  const y0 = (RM_PAGE_HEIGHT - drawH) / 2;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bg.bitmap, x0, y0, drawW, drawH);
+  ctx.restore();
 }
 
 /** Stroke Y bounds — use values precomputed in main, else scan points. */
@@ -834,7 +973,7 @@ function temporalColor(t) {
 const FRAME_BUDGET_MS = 12;
 const ANIM_TARGET_MS  = 1500;
 
-function drawStrokesProgressive(wrapper, strokes, gen, { animate }) {
+function drawStrokesProgressive(wrapper, strokes, gen, { animate, background }) {
   const highlights = [];
   const regular    = [];
   const erasers    = [];
@@ -845,7 +984,7 @@ function drawStrokesProgressive(wrapper, strokes, gen, { animate }) {
     else                      regular.push(s);
   }
 
-  const tiles = setupStrokeTiles(wrapper, highlights.concat(regular));
+  const tiles = setupStrokeTiles(wrapper, highlights.concat(regular), background);
 
   // Highlights (bottom layer) — drawn instantly with 'multiply'.
   for (const s of highlights) drawTiled(tiles, s, s.color, s.opacity, 'multiply');

@@ -11,7 +11,7 @@ function uuid() {
   return crypto.randomUUID();
 }
 
-function buildMetadata(visibleName) {
+function buildMetadata(visibleName, parent) {
   const now = Date.now().toString();
   return JSON.stringify({
     createdTime: now,
@@ -19,7 +19,7 @@ function buildMetadata(visibleName) {
     lastOpened: '',
     lastOpenedPage: 0,
     new: true,
-    parent: '',
+    parent: parent || '',
     pinned: false,
     source: '',
     type: 'DocumentType',
@@ -62,7 +62,7 @@ async function cleanupUuid(conn, id) {
  * If any step fails, all files for this UUID are removed (rollback).
  * Does NOT restart xochitl — caller should batch and restart once.
  */
-async function uploadPdf(conn, sftp, localPdfPath, visibleName) {
+async function uploadPdf(conn, sftp, localPdfPath, visibleName, parent) {
   const id = uuid();
   const fileSize = fs.statSync(localPdfPath).size;
   const remotePdf      = `${REMOTE_PATH}/${id}.pdf`;
@@ -75,7 +75,7 @@ async function uploadPdf(conn, sftp, localPdfPath, visibleName) {
     // so it must only appear once all other files are in place.
     await ssh.upload(sftp, localPdfPath, remotePdf);
     await ssh.writeFile(sftp, remoteContent, buildContent(fileSize));
-    await ssh.writeFile(sftp, remoteMetadata, buildMetadata(visibleName));
+    await ssh.writeFile(sftp, remoteMetadata, buildMetadata(visibleName, parent));
   } catch (err) {
     await cleanupUuid(conn, id);
     throw new Error(`Failed to upload "${visibleName}": ${err.message}`);

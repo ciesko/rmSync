@@ -115,6 +115,20 @@ ipcMain.handle('get-page-image', (_, imagePath) => {
   return notes.getPageImage(imagePath);
 });
 
+// Returns the raw bytes of a synced source PDF so the renderer can draw a crisp
+// page background underneath annotation strokes. The path is validated to live
+// inside the configured storage's raw directory to avoid arbitrary file reads.
+ipcMain.handle('get-pdf-bytes', (_, pdfPath) => {
+  const fs = require('fs');
+  const s = store.load();
+  if (!s.storagePath || !pdfPath) return null;
+  const rawDir = path.resolve(s.storagePath, 'raw');
+  const resolved = path.resolve(pdfPath);
+  if (resolved !== rawDir && !resolved.startsWith(rawDir + path.sep)) return null;
+  if (!resolved.endsWith('.pdf') || !fs.existsSync(resolved)) return null;
+  return fs.readFileSync(resolved);
+});
+
 // Ramer–Douglas–Peucker simplification (iterative to avoid stack overflow on
 // long continuous-write strokes). Drops near-collinear points whose deviation
 // is below EPSILON in .rm coordinate units — visually lossless but cuts the
@@ -233,7 +247,7 @@ ipcMain.handle('pick-pdfs', async () => {
   return result.filePaths;
 });
 
-ipcMain.handle('upload-pdfs', async (_, filePaths) => {
+ipcMain.handle('upload-pdfs', async (_, filePaths, parentId) => {
   const s = store.load();
   if (!s.password) throw new Error('Password not set — open Settings first.');
 
@@ -258,9 +272,9 @@ ipcMain.handle('upload-pdfs', async (_, filePaths) => {
       try {
         let r;
         if (ext === '.md') {
-          r = await markdownUpload.uploadMarkdown(conn, sftp, filePaths[i], name);
+          r = await markdownUpload.uploadMarkdown(conn, sftp, filePaths[i], name, parentId);
         } else {
-          r = await pdfUpload.uploadPdf(conn, sftp, filePaths[i], name);
+          r = await pdfUpload.uploadPdf(conn, sftp, filePaths[i], name, parentId);
         }
         results.push(r);
       } catch (err) {
