@@ -248,6 +248,15 @@ fi
 
 if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
   ok "Found: $APP_PATH"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    info "Applying stable local app identity…"
+    codesign --force --deep --sign - \
+      --identifier com.ciesko.rmsync \
+      --requirements '=designated => identifier "com.ciesko.rmsync"' \
+      "$APP_PATH"
+    codesign --verify --deep --strict "$APP_PATH"
+    ok "Stable app identity applied"
+  fi
   open "$APP_PATH"
 else
   warn "No built .app found — running with Electron directly…"
